@@ -136,6 +136,7 @@ why-slow --no-color
 
 - 📖 **[System Architecture](docs/ARCHITECTURE.md)**: Deep dive into the Collector, Intelligence Engine, and Presenter pipeline.
 - 📋 **[Rules Catalog](docs/RULES_CATALOG.md)**: Exhaustive reference for all 47 diagnostic rules across Tier 1, 2, and 3.
+- 🏆 **[Master Benchmark & Stress Report](docs/MASTER_BENCHMARK.md)**: Live Docker stress test results, 3,000 PID performance scaling, and memory benchmarks.
 - 🎯 **[Diagnostic Disambiguation](docs/DIAGNOSTIC_DISAMBIGUATION.md)**: Explanation of multi-signal correlation and root cause isolation.
 - 📜 **[Changelog](docs/CHANGELOG.md)**: Version history, releases, and changelog.
 
