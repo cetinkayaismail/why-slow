@@ -53,12 +53,12 @@ Contributing & Secondary Findings:
 
 ### Go Install (Go 1.22+)
 ```bash
-go install github.com/ismail/why-slow/cmd/why-slow@latest
+go install github.com/cetinkayaismail/why-slow/cmd/why-slow@latest
 ```
 
 ### Build from Source
 ```bash
-git clone https://github.com/ismail/why-slow.git
+git clone https://github.com/cetinkayaismail/why-slow.git
 cd why-slow
 make build
 sudo make install
