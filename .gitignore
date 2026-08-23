@@ -1,0 +1,29 @@
+# Binaries and build outputs
+bin/
+/why-slow
+/why-slow-*
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts and internal test suites
+internal_tests/
+docs/internal/
+.agents/
+scratch/
+implementation_plan.md
+project_base.md
+*.out
+*.test
+coverage.*
+cpu.pprof
+mem.pprof
+
+# IDE and OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
