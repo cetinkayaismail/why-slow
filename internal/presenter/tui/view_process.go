@@ -20,14 +20,20 @@ const (
 
 // TableState tracks cursor position, scroll offset, and sort mode for the process table.
 type TableState struct {
-	CursorIdx int
-	ScrollIdx int
-	SortMode  ProcessSortMode
+	CursorIdx   int
+	ScrollIdx   int
+	SortMode    ProcessSortMode
+	SelectedPID int
+	LockedPID   int
 }
 
 // RenderProcessTable draws the interactive process list with wait-channel columns.
 func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, state *TableState, startY, width, height int) {
-	s.DrawBox(1, startY, width, height, "ACTIVE PROCESSES & KERNEL WAIT-CHANNELS")
+	title := "ACTIVE PROCESSES & KERNEL WAIT-CHANNELS"
+	if state.LockedPID > 0 {
+		title = fmt.Sprintf("ACTIVE PROCESSES [🔒 LOCKED ON PID: %d — Press 'l' to Unlock]", state.LockedPID)
+	}
+	s.DrawBox(1, startY, width, height, title)
 
 	tableW := width - 2
 	if tableW <= 0 {
@@ -44,6 +50,8 @@ func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, 
 		return
 	}
 
+	// Follow tracked/locked PID across dynamic re-sorts
+	trackPID(state, sorted)
 	clampScroll(state, len(sorted), maxVisibleRows)
 
 	for i := 0; i < maxVisibleRows; i++ {
@@ -55,7 +63,26 @@ func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, 
 
 		p := sorted[rowIdx]
 		isSelected := rowIdx == state.CursorIdx
-		renderProcessRow(s, theme, p, isSelected, startY+2+i, tableW)
+		isLocked := p.PID == state.LockedPID
+		renderProcessRow(s, theme, p, isSelected, isLocked, startY+2+i, tableW)
+	}
+}
+
+func trackPID(state *TableState, sorted []collector.ProcessDiff) {
+	targetPID := state.SelectedPID
+	if state.LockedPID > 0 {
+		targetPID = state.LockedPID
+	}
+
+	if targetPID > 0 {
+		for idx, p := range sorted {
+			if p.PID == targetPID {
+				state.CursorIdx = idx
+				return
+			}
+		}
+	} else if len(sorted) > 0 && state.CursorIdx < len(sorted) {
+		state.SelectedPID = sorted[state.CursorIdx].PID
 	}
 }
 
@@ -98,9 +125,13 @@ func clampScroll(state *TableState, totalRows, maxVisible int) {
 	}
 }
 
-func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelected bool, row, tableW int) {
+func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelected, isLocked bool, row, tableW int) {
 	prefix := "  "
-	if isSelected {
+	if isLocked && isSelected {
+		prefix = "🔒▶"
+	} else if isLocked {
+		prefix = "🔒 "
+	} else if isSelected {
 		prefix = "▶ "
 	}
 
@@ -133,6 +164,8 @@ func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelect
 
 	if isSelected {
 		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiWhite+BgBlue))
+	} else if isLocked {
+		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiYellow))
 	} else if p.State == 'D' {
 		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiRed))
 	} else {

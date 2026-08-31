@@ -128,9 +128,13 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 	case "\x1b[A", "\x1bOA", "k": // Up
 		if state.TableState.CursorIdx > 0 {
 			state.TableState.CursorIdx--
+			updateSelectedPID(state)
 		}
 	case "\x1b[B", "\x1bOB", "j": // Down
 		state.TableState.CursorIdx++
+		updateSelectedPID(state)
+	case "l", "p": // Lock / Pin selected PID
+		toggleLockPID(state)
 	case " ": // Space (Pause / Freeze)
 		state.IsFrozen = !state.IsFrozen
 	case "s": // Save report
@@ -161,6 +165,26 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 		}
 	}
 	return false
+}
+
+func updateSelectedPID(state *UIState) {
+	if state.LastDiff == nil || len(state.LastDiff.Processes) == 0 {
+		return
+	}
+	sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode)
+	if state.TableState.CursorIdx < len(sorted) {
+		state.TableState.SelectedPID = sorted[state.TableState.CursorIdx].PID
+	}
+}
+
+func toggleLockPID(state *UIState) {
+	if state.TableState.LockedPID > 0 {
+		state.TableState.LockedPID = 0
+		return
+	}
+	if state.TableState.SelectedPID > 0 {
+		state.TableState.LockedPID = state.TableState.SelectedPID
+	}
 }
 
 func cycleModal(state *UIState) {
