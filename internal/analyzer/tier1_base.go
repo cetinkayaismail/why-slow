@@ -41,7 +41,7 @@ func (r *RuleCPUSaturation) ID() string             { return "BASE_CPU_SATURATIO
 func (r *RuleCPUSaturation) Tier() int              { return 1 }
 func (r *RuleCPUSaturation) IsPIDDependent() bool   { return true }
 func (r *RuleCPUSaturation) Suppresses() []string {
-	return []string{"CONT_CONTEXT_SWITCH_STORM", "CONT_SCHED_RUNQUEUE_STARVATION"}
+	return []string{"CONT_CONTEXT_SWITCH_STORM", "CONT_SCHED_RUNQUEUE_STARVATION", "CONT_RUNAWAY_CPU_PROCESS"}
 }
 
 func (r *RuleCPUSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {

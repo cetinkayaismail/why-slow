@@ -103,6 +103,7 @@ func GetTier2Rules() []Rule {
 		&RulePipeReadBurstBlock{},
 		&RuleTCPCloseWaitLeak{},
 		&RuleSustainedLoadSaturation{},
+		&RuleRunawayCPUProcess{},
 	}
 }
 
@@ -3663,6 +3664,51 @@ func (r *RuleSustainedLoadSaturation) Evaluate(diff *collector.SnapshotDiff) (*D
 		Remediation: "Scale out compute instances, increase CPU allocations, or audit long-running thread pools for excessive concurrency.",
 	}, true
 }
+
+// RuleRunawayCPUProcess detects single or multi-thread runaway CPU hogs on a core.
+type RuleRunawayCPUProcess struct{ noSuppression }
+
+func (r *RuleRunawayCPUProcess) ID() string           { return "CONT_RUNAWAY_CPU_PROCESS" }
+func (r *RuleRunawayCPUProcess) Tier() int            { return 2 }
+func (r *RuleRunawayCPUProcess) IsPIDDependent() bool { return true }
+
+func (r *RuleRunawayCPUProcess) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || len(diff.Processes) == 0 {
+		return nil, false
+	}
+
+	var topProc *collector.ProcessDiff
+	for i := range diff.Processes {
+		p := &diff.Processes[i]
+		if p.CpusAllowed != 1 && p.Policy == 0 && p.CPUPercent >= 80.0 {
+			if topProc == nil || p.CPUPercent > topProc.CPUPercent {
+				topProc = p
+			}
+		}
+	}
+
+	if topProc == nil {
+		return nil, false
+	}
+
+	return &Diagnosis{
+		RuleID:      r.ID(),
+		Tier:        2,
+		Severity:    SeverityHigh,
+		Confidence:  0.92,
+		Title:       fmt.Sprintf("Runaway Compute CPU Hog (PID %d [%s])", topProc.PID, topProc.Comm),
+		Explanation: fmt.Sprintf("Process '%s' (PID %d) is consuming %.1f%% CPU on a core, starving other workloads of compute cycles.", topProc.Comm, topProc.PID, topProc.CPUPercent),
+		Evidence: []string{
+			fmt.Sprintf("Process CPU Utilization: %.1f%% on PID %d [%s]", topProc.CPUPercent, topProc.PID, topProc.Comm),
+			fmt.Sprintf("Active Threads: %d | Kernel State: %c", topProc.NumThreads, topProc.State),
+		},
+		CulpritPID:     topProc.PID,
+		CulpritName:    topProc.Comm,
+		CulpritDetails: fmt.Sprintf("%.1f%% CPU utilization", topProc.CPUPercent),
+		Remediation:    fmt.Sprintf("Lower CPU scheduling priority: renice -n 19 -p %d, or send graceful stop: kill -TERM %d", topProc.PID, topProc.PID),
+	}, true
+}
+
 
 
 

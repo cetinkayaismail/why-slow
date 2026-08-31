@@ -31,6 +31,7 @@ type UIState struct {
 	TableState    TableState
 	LastReport    *analyzer.DiagnosticReport
 	LastDiff      *collector.SnapshotDiff
+	PrevSnapshot  *collector.SystemSnapshot
 	StatusMessage string
 	Theme         *Theme
 }
@@ -72,7 +73,7 @@ func eventLoop(ctx context.Context, fd int, interval time.Duration, runCtx colle
 	defer ticker.Stop()
 
 	// Initial collection pass
-	refreshSnapshot(ctx, engine, runCtx, state, interval)
+	initSnapshot(ctx, engine, runCtx, state)
 	renderFrame(screen, state, fd)
 
 	for {
@@ -89,7 +90,7 @@ func eventLoop(ctx context.Context, fd int, interval time.Duration, runCtx colle
 			}
 		case <-ticker.C:
 			if !state.IsFrozen {
-				refreshSnapshot(ctx, engine, runCtx, state, interval)
+				refreshSnapshot(ctx, engine, runCtx, state)
 				renderFrame(screen, state, fd)
 			}
 		default:
@@ -105,12 +106,12 @@ func eventLoop(ctx context.Context, fd int, interval time.Duration, runCtx colle
 	}
 }
 
-func refreshSnapshot(ctx context.Context, engine *analyzer.Engine, runCtx collector.RunContext, state *UIState, interval time.Duration) {
+func initSnapshot(ctx context.Context, engine *analyzer.Engine, runCtx collector.RunContext, state *UIState) {
 	snapA, errA := collector.CollectSnapshot(ctx)
 	if errA != nil {
 		return
 	}
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	snapB, errB := collector.CollectSnapshot(ctx)
 	if errB != nil {
 		return
@@ -119,6 +120,23 @@ func refreshSnapshot(ctx context.Context, engine *analyzer.Engine, runCtx collec
 	report := engine.Analyze(diff, runCtx)
 	state.LastDiff = diff
 	state.LastReport = report
+	state.PrevSnapshot = snapB
+}
+
+func refreshSnapshot(ctx context.Context, engine *analyzer.Engine, runCtx collector.RunContext, state *UIState) {
+	currentSnap, err := collector.CollectSnapshot(ctx)
+	if err != nil {
+		return
+	}
+	if state.PrevSnapshot == nil {
+		state.PrevSnapshot = currentSnap
+		return
+	}
+	diff := collector.DiffSnapshots(state.PrevSnapshot, currentSnap)
+	report := engine.Analyze(diff, runCtx)
+	state.LastDiff = diff
+	state.LastReport = report
+	state.PrevSnapshot = currentSnap
 }
 
 func handleKeyPress(key string, state *UIState, screen *Screen) bool {

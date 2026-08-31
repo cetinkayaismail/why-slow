@@ -1318,7 +1318,7 @@ func (r *RuleInotifyQueueOverflow) Evaluate(diff *collector.SnapshotDiff) (*Diag
 		maxQueued = 16384
 	}
 
-	if maxQueued <= 16384 && inotify.MaxUserWatches >= 65536 && (diff.ContextSwitchesDelta >= 25000 || diff.ProcessesCreatedDelta >= 10) {
+	if maxQueued <= 16384 && inotify.MaxUserWatches >= 65536 && (diff.ContextSwitchesDelta >= 40000 || diff.ProcessesCreatedDelta >= 100) {
 		return &Diagnosis{
 			RuleID:      r.ID(),
 			Tier:        3,

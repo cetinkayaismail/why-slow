@@ -2741,6 +2741,41 @@ func TestRuleSustainedLoadSaturation(t *testing.T) {
 	}
 }
 
+func TestRuleRunawayCPUProcess(t *testing.T) {
+	rule := &RuleRunawayCPUProcess{}
+
+	// Positive test: single process consuming 98% CPU
+	diffPos := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{PID: 1234, Comm: "python3", CPUPercent: 98.5, State: 'R', NumThreads: 1, CpusAllowed: 4, Policy: 0},
+			{PID: 1, Comm: "systemd", CPUPercent: 0.1, State: 'S', NumThreads: 1, CpusAllowed: 4, Policy: 0},
+		},
+	}
+	diag, ok := rule.Evaluate(diffPos)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleRunawayCPUProcess to trigger on 98.5%% CPU process")
+	}
+	if diag.CulpritPID != 1234 {
+		t.Errorf("expected CulpritPID 1234, got %d", diag.CulpritPID)
+	}
+	if diag.Severity != SeverityHigh {
+		t.Errorf("expected SeverityHigh, got %s", diag.Severity)
+	}
+
+	// Negative test: all processes below 80% CPU
+	diffNeg := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{PID: 1234, Comm: "python3", CPUPercent: 45.0, State: 'R', NumThreads: 1, CpusAllowed: 4, Policy: 0},
+			{PID: 1, Comm: "systemd", CPUPercent: 0.1, State: 'S', NumThreads: 1, CpusAllowed: 4, Policy: 0},
+		},
+	}
+	diagNeg, okNeg := rule.Evaluate(diffNeg)
+	if okNeg || diagNeg != nil {
+		t.Fatalf("expected RuleRunawayCPUProcess not to trigger on 45%% CPU")
+	}
+}
+
+
 
 
 
