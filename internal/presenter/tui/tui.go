@@ -21,6 +21,7 @@ const (
 	ModalDrilldown
 	ModalBlastRadius
 	ModalHelp
+	ModalCausalTree
 )
 
 // UIState encapsulates the real-time state of the interactive console.
@@ -144,6 +145,10 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 		state.TableState.SortMode = SortByDState
 	case "?":
 		toggleModal(state, ModalHelp)
+	case "c":
+		toggleModal(state, ModalCausalTree)
+	case "\t":
+		cycleModal(state)
 	case "\r", "\n":
 		toggleModal(state, ModalDrilldown)
 	case "x":
@@ -156,6 +161,19 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 		}
 	}
 	return false
+}
+
+func cycleModal(state *UIState) {
+	switch state.ActiveModal {
+	case ModalNone:
+		state.ActiveModal = ModalDrilldown
+	case ModalDrilldown:
+		state.ActiveModal = ModalCausalTree
+	case ModalCausalTree:
+		state.ActiveModal = ModalHelp
+	default:
+		state.ActiveModal = ModalNone
+	}
 }
 
 func toggleModal(state *UIState, target ActiveModal) {
@@ -220,6 +238,8 @@ func renderActiveModal(s *Screen, state *UIState, w, h int) {
 	switch state.ActiveModal {
 	case ModalHelp:
 		RenderHelpModal(s, state.Theme, w, h)
+	case ModalCausalTree:
+		RenderCausalTreeModal(s, state.Theme, state.LastReport, w, h)
 	case ModalDrilldown:
 		if state.LastDiff != nil && len(state.LastDiff.Processes) > 0 {
 			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode)
