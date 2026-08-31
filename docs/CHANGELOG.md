@@ -17,6 +17,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - `/proc/sys/vm/` parser (`internal/collector/vm_config.go`) capturing `overcommit_memory` and `swappiness`.
 - **Multi-Sample Statistical Aggregation Mode (`--samples N`)**:
   - Field-by-field median reduction across multi-snapshot sequences (`internal/collector/median.go`) eliminating transient microsecond spikes.
+- **Interactive Full-Screen Terminal User Interface (`-i` / `--tui`)**:
+  - Double-buffered flicker-free VT100/ANSI rendering in pure Go stdlib (`internal/presenter/tui/`).
+  - Explanatory Root Cause Hero Card with kernel evidence and actionable remediation.
+  - Interactive process table with live wait-channels (`wchan`), D-state tracking, and quick sorting (`1-4`).
+  - Process drill-down inspection modal (`Enter`), keybinding cheat sheet (`?`), and snapshot freeze (`Space`) / export (`s`).
+  - Pre-Flight Blast Radius Assessment modal (`x`) for human-in-the-loop remediation safety.
 - **Continuous Sentinel Watch Mode (`--watch` & `--alert-threshold`)**:
   - Background daemon loop continuously evaluating system bottlenecks and alerting on threshold breaches.
 

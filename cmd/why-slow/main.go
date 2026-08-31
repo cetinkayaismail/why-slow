@@ -16,6 +16,7 @@ import (
 	"why-slow/internal/analyzer"
 	"why-slow/internal/collector"
 	"why-slow/internal/presenter"
+	"why-slow/internal/presenter/tui"
 )
 
 var version = "dev"
@@ -28,6 +29,7 @@ type cliConfig struct {
 	samples        int
 	watch          bool
 	alertThreshold string
+	tui            bool
 }
 
 func main() {
@@ -39,6 +41,8 @@ func main() {
 	samplesFlag := flag.Int("samples", 1, "Number of sampling windows to collect (uses median for statistical noise reduction)")
 	watchFlag := flag.Bool("watch", false, "Run continuously in watch mode, reporting findings meeting alert threshold")
 	alertFlag := flag.String("alert-threshold", "info", "Minimum severity to report in watch mode (critical, high, medium, info)")
+	tuiFlag := flag.Bool("tui", false, "Launch full-screen interactive Terminal User Interface (TUI)")
+	iFlag := flag.Bool("i", false, "Alias for --tui (launch interactive TUI)")
 
 	setupFlagUsage()
 	flag.Parse()
@@ -65,6 +69,7 @@ func main() {
 		samples:        *samplesFlag,
 		watch:          *watchFlag,
 		alertThreshold: *alertFlag,
+		tui:            *tuiFlag || *iFlag,
 	}
 
 	runCtx := collector.RunContext{
@@ -76,6 +81,14 @@ func main() {
 	defer cancel()
 
 	setupSignalHandler(cancel)
+
+	if cfg.tui {
+		if err := tui.RunTUI(ctx, cfg.interval, runCtx, cfg.noColor); err != nil {
+			fmt.Fprintf(os.Stderr, "why-slow: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if cfg.watch {
 		runWatchLoop(ctx, cfg, runCtx)
@@ -207,7 +220,8 @@ func setupFlagUsage() {
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
 		fmt.Fprintf(os.Stderr, "  $ why-slow                           # Standard terminal diagnostic run (1s window)\n")
-		fmt.Fprintf(os.Stderr, "  $ sudo why-slow                      # Full visibility run across all system PIDs\n")
+		fmt.Fprintf(os.Stderr, "  $ why-slow -i                        # Interactive live full-screen TUI console\n")
+		fmt.Fprintf(os.Stderr, "  $ sudo why-slow -i                   # Interactive TUI with full root PID visibility\n")
 		fmt.Fprintf(os.Stderr, "  $ why-slow --interval 3s             # 3-second sampling window for sustained spikes\n")
 		fmt.Fprintf(os.Stderr, "  $ why-slow --samples 5               # 5-sample median statistical noise reduction\n")
 		fmt.Fprintf(os.Stderr, "  $ why-slow --watch                   # Continuous background monitoring sentinel\n")
