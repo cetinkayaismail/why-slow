@@ -57,6 +57,6 @@ func RenderDrilldownModal(s *Screen, theme *Theme, p *collector.ProcessDiff, wid
 		if startY+2+i >= startY+modalH-1 {
 			break
 		}
-		s.PrintAt(startY+2+i, startX+3, line)
+		s.PrintLineAt(startY+2+i, startX+2, modalW-4, line)
 	}
 }

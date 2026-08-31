@@ -44,5 +44,5 @@ func RenderHeader(s *Screen, theme *Theme, report *analyzer.DiagnosticReport, di
 	ioGauge := fmt.Sprintf("I/O %s", theme.ProgressBar(ioStall, gaugeW))
 
 	line := fmt.Sprintf("  PRESSURE (PSI):  %s   %s   %s", cpuGauge, memGauge, ioGauge)
-	s.PrintAt(3, 2, line)
+	s.PrintLineAt(3, 2, width-2, line)
 }

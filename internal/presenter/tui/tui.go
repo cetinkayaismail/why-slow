@@ -72,7 +72,7 @@ func eventLoop(ctx context.Context, fd int, interval time.Duration, runCtx colle
 
 	// Initial collection pass
 	refreshSnapshot(ctx, engine, runCtx, state, interval)
-	renderFrame(screen, state)
+	renderFrame(screen, state, fd)
 
 	for {
 		select {
@@ -82,14 +82,14 @@ func eventLoop(ctx context.Context, fd int, interval time.Duration, runCtx colle
 			if sig == syscall.SIGWINCH {
 				w, h, _ := GetTerminalSize(fd)
 				screen.Width, screen.Height = w, h
-				renderFrame(screen, state)
+				renderFrame(screen, state, fd)
 			} else {
 				return nil
 			}
 		case <-ticker.C:
 			if !state.IsFrozen {
 				refreshSnapshot(ctx, engine, runCtx, state, interval)
-				renderFrame(screen, state)
+				renderFrame(screen, state, fd)
 			}
 		default:
 			key, _ := ReadKey(os.Stdin)
@@ -97,7 +97,7 @@ func eventLoop(ctx context.Context, fd int, interval time.Duration, runCtx colle
 				if shouldQuit := handleKeyPress(key, state, screen); shouldQuit {
 					return nil
 				}
-				renderFrame(screen, state)
+				renderFrame(screen, state, fd)
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
@@ -124,11 +124,11 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 	switch key {
 	case "q", "\x03": // q or Ctrl+C
 		return true
-	case "\x1b[A", "k": // Up
+	case "\x1b[A", "\x1bOA", "k": // Up
 		if state.TableState.CursorIdx > 0 {
 			state.TableState.CursorIdx--
 		}
-	case "\x1b[B", "j": // Down
+	case "\x1b[B", "\x1bOB", "j": // Down
 		state.TableState.CursorIdx++
 	case " ": // Space (Pause / Freeze)
 		state.IsFrozen = !state.IsFrozen
@@ -190,7 +190,11 @@ func applyRemedyAction(state *UIState) {
 	state.ActiveModal = ModalNone
 }
 
-func renderFrame(s *Screen, state *UIState) {
+func renderFrame(s *Screen, state *UIState, fd int) {
+	if curW, curH, err := GetTerminalSize(fd); err == nil && curW > 0 && curH > 0 {
+		s.Width, s.Height = curW, curH
+	}
+
 	s.Clear()
 	w, h := s.Width, s.Height
 

@@ -59,16 +59,16 @@ func RenderBlastRadiusModal(s *Screen, theme *Theme, pid int, comm string, impac
 	s.DrawBox(startX, startY, modalW, modalH, "PRE-FLIGHT BLAST RADIUS ASSESSMENT")
 
 	if impact.IsBlocked {
-		s.PrintAt(startY+2, startX+3, theme.Colorize("❌ ACTION BLOCKED BY SAFETY GATE:", Bold+FgHiRed))
-		s.PrintAt(startY+4, startX+3, impact.BlockReason)
-		s.PrintAt(startY+8, startX+3, theme.Colorize("Press [Esc] to return to the dashboard.", Bold+FgHiCyan))
+		s.PrintLineAt(startY+2, startX+2, modalW-4, theme.Colorize("❌ ACTION BLOCKED BY SAFETY GATE:", Bold+FgHiRed))
+		s.PrintLineAt(startY+4, startX+2, modalW-4, impact.BlockReason)
+		s.PrintLineAt(startY+8, startX+2, modalW-4, theme.Colorize("Press [Esc] to return to the dashboard.", Bold+FgHiCyan))
 		return
 	}
 
-	s.PrintAt(startY+2, startX+3, fmt.Sprintf("• Target Process:   PID %d [%s]", pid, comm))
-	s.PrintAt(startY+3, startX+3, fmt.Sprintf("• Child Processes:  %d active worker children detected", impact.ChildCount))
-	s.PrintAt(startY+4, startX+3, "• Safety Rating:    🟢 LOW (Non-destructive scheduling throttle)")
-	s.PrintAt(startY+6, startX+3, theme.Colorize(fmt.Sprintf("• Action to Apply:  %s", impact.SuggestedAction), Bold+FgHiYellow))
-	s.PrintAt(startY+8, startX+3, "Are you sure you want to execute this remedy?")
-	s.PrintAt(startY+10, startX+3, theme.Colorize("Press [y] to Confirm & Apply   |   Press [Esc/n] to Cancel", Bold+FgHiGreen))
+	s.PrintLineAt(startY+2, startX+2, modalW-4, fmt.Sprintf("• Target Process:   PID %d [%s]", pid, comm))
+	s.PrintLineAt(startY+3, startX+2, modalW-4, fmt.Sprintf("• Child Processes:  %d active worker children detected", impact.ChildCount))
+	s.PrintLineAt(startY+4, startX+2, modalW-4, "• Safety Rating:    🟢 LOW (Non-destructive scheduling throttle)")
+	s.PrintLineAt(startY+6, startX+2, modalW-4, theme.Colorize(fmt.Sprintf("• Action to Apply:  %s", impact.SuggestedAction), Bold+FgHiYellow))
+	s.PrintLineAt(startY+8, startX+2, modalW-4, "Are you sure you want to execute this remedy?")
+	s.PrintLineAt(startY+10, startX+2, modalW-4, theme.Colorize("Press [y] to Confirm & Apply   |   Press [Esc/n] to Cancel", Bold+FgHiGreen))
 }

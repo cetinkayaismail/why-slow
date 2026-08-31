@@ -35,6 +35,6 @@ func RenderHelpModal(s *Screen, theme *Theme, width, height int) {
 		if startY+2+i >= startY+modalH-1 {
 			break
 		}
-		s.PrintAt(startY+2+i, startX+3, sc)
+		s.PrintLineAt(startY+2+i, startX+2, modalW-4, sc)
 	}
 }

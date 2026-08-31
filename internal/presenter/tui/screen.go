@@ -36,18 +36,18 @@ func NewScreen(width, height int, theme *Theme) *Screen {
 
 // EnterAltScreen switches the terminal to the alternate screen buffer.
 func (s *Screen) EnterAltScreen() {
-	s.buf.WriteString("\033[?1049h\033[H\033[?25l")
+	s.buf.WriteString("\033[?1049h\033[2J\033[H\033[?25l")
 }
 
 // ExitAltScreen exits the alternate screen buffer and restores cursor.
 func (s *Screen) ExitAltScreen() {
-	s.buf.WriteString("\033[?25h\033[?1049l")
+	s.buf.WriteString("\033[?25h\033[2J\033[?1049l")
 }
 
 // Clear resets cursor to top-left and clears buffer.
 func (s *Screen) Clear() {
 	s.buf.Reset()
-	s.buf.WriteString("\033[H")
+	s.buf.WriteString("\033[2J\033[H")
 }
 
 // MoveTo sets cursor position (1-indexed).
@@ -61,6 +61,18 @@ func (s *Screen) PrintAt(row, col int, text string) {
 	s.buf.WriteString(text)
 }
 
+// PrintLineAt prints a line at (row, col) fitted and padded precisely to target width.
+func (s *Screen) PrintLineAt(row, col, width int, text string) {
+	if width <= 0 {
+		return
+	}
+	fitted := TruncateVisible(text, width)
+	padded := PadRightVisible(fitted, width)
+	s.MoveTo(row, col)
+	s.buf.WriteString(padded)
+	s.buf.WriteString("\033[K")
+}
+
 // DrawBox renders a framed box with an optional title.
 func (s *Screen) DrawBox(x, y, w, h int, title string) {
 	if w < 4 || h < 2 {
@@ -72,7 +84,7 @@ func (s *Screen) DrawBox(x, y, w, h int, title string) {
 	s.buf.WriteString(BoxTopLeft)
 	if title != "" {
 		titleText := fmt.Sprintf(" %s ", title)
-		titleLen := len(titleText)
+		titleLen := VisibleLen(titleText)
 		if titleLen < w-2 {
 			s.buf.WriteString(s.theme.Colorize(titleText, Bold+FgHiCyan))
 			s.buf.WriteString(strings.Repeat(BoxHorizontal, w-2-titleLen))
@@ -84,11 +96,11 @@ func (s *Screen) DrawBox(x, y, w, h int, title string) {
 	}
 	s.buf.WriteString(BoxTopRight)
 
-	// Side borders
+	// Side borders and interior line blanks
 	for row := 1; row < h-1; row++ {
 		s.MoveTo(y+row, x)
 		s.buf.WriteString(BoxVertical)
-		s.MoveTo(y+row, x+w-1)
+		s.buf.WriteString(strings.Repeat(" ", w-2))
 		s.buf.WriteString(BoxVertical)
 	}
 

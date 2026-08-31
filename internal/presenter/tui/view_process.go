@@ -29,12 +29,14 @@ type TableState struct {
 func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, state *TableState, startY, width, height int) {
 	s.DrawBox(1, startY, width, height, "ACTIVE PROCESSES & KERNEL WAIT-CHANNELS")
 
+	tableW := width - 2
+	if tableW <= 0 {
+		return
+	}
+
 	header := fmt.Sprintf("   %-7s %-16s %-5s %-7s %-10s %-10s %-20s %s",
 		"PID", "COMM", "STATE", "CPU%", "READ/s", "WRITE/s", "WCHAN", "CGROUP")
-	if len(header) > width-4 {
-		header = header[:width-4]
-	}
-	s.PrintAt(startY+1, 2, theme.Colorize(header, Bold+Underline))
+	s.PrintLineAt(startY+1, 2, tableW, theme.Colorize(header, Bold+Underline))
 
 	sorted := sortProcesses(procs, state.SortMode)
 	maxVisibleRows := height - 3
@@ -47,12 +49,13 @@ func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, 
 	for i := 0; i < maxVisibleRows; i++ {
 		rowIdx := state.ScrollIdx + i
 		if rowIdx >= len(sorted) {
-			break
+			s.PrintLineAt(startY+2+i, 2, tableW, "")
+			continue
 		}
 
 		p := sorted[rowIdx]
 		isSelected := rowIdx == state.CursorIdx
-		renderProcessRow(s, theme, p, isSelected, startY+2+i, width)
+		renderProcessRow(s, theme, p, isSelected, startY+2+i, tableW)
 	}
 }
 
@@ -95,7 +98,7 @@ func clampScroll(state *TableState, totalRows, maxVisible int) {
 	}
 }
 
-func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelected bool, row, width int) {
+func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelected bool, row, tableW int) {
 	prefix := "  "
 	if isSelected {
 		prefix = "▶ "
@@ -128,15 +131,11 @@ func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelect
 	line := fmt.Sprintf("%s%-7d %-16s %-5c %-6.1f%% %-9.1fM %-9.1fM %-20s %s",
 		prefix, p.PID, comm, p.State, p.CPUPercent, readMB, writeMB, wchan, cgroup)
 
-	if len(line) > width-4 {
-		line = line[:width-4]
-	}
-
 	if isSelected {
-		s.PrintAt(row, 2, theme.Colorize(line, Bold+FgHiWhite+BgBlue))
+		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiWhite+BgBlue))
 	} else if p.State == 'D' {
-		s.PrintAt(row, 2, theme.Colorize(line, Bold+FgHiRed))
+		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiRed))
 	} else {
-		s.PrintAt(row, 2, line)
+		s.PrintLineAt(row, 2, tableW, line)
 	}
 }

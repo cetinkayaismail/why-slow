@@ -59,5 +59,5 @@ func RenderRuleMatrix(s *Screen, theme *Theme, report *analyzer.DiagnosticReport
 	hStr := theme.Colorize(fmt.Sprintf("Healthy: %d Rules", healthyCount), Bold+FgHiGreen)
 
 	line := fmt.Sprintf("  [%s]   [%s]   [%s]   [%s]   [c: Causal Tree | ?: Help | q: Quit]", t1Str, t2Str, t3Str, hStr)
-	s.PrintAt(startY+1, 2, line)
+	s.PrintLineAt(startY+1, 2, width-2, line)
 }

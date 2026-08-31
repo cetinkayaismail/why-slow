@@ -122,3 +122,80 @@ func (t *Theme) ProgressBar(percent float64, width int) string {
 
 	return fmt.Sprintf("[%s] %5.1f%%", t.Colorize(barChars, color), percent)
 }
+
+// StripANSI removes all ANSI escape sequences from a string.
+func StripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\033' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// VisibleLen returns the printed terminal column width of a string ignoring ANSI codes.
+func VisibleLen(s string) int {
+	return len(StripANSI(s))
+}
+
+// PadRightVisible pads string with trailing spaces until visible length reaches target width.
+func PadRightVisible(s string, width int) string {
+	vLen := VisibleLen(s)
+	if vLen >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-vLen)
+}
+
+// TruncateVisible shortens a string so its visible length does not exceed maxWidth.
+func TruncateVisible(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if VisibleLen(s) <= maxWidth {
+		return s
+	}
+
+	var b strings.Builder
+	inEsc := false
+	visCount := 0
+
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\033' {
+			inEsc = true
+			b.WriteByte(s[i])
+			continue
+		}
+		if inEsc {
+			b.WriteByte(s[i])
+			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+
+		if visCount+3 >= maxWidth && maxWidth > 4 {
+			b.WriteString("...")
+			b.WriteString(Reset)
+			break
+		} else if visCount >= maxWidth {
+			b.WriteString(Reset)
+			break
+		}
+
+		b.WriteByte(s[i])
+		visCount++
+	}
+	return b.String()
+}
+
