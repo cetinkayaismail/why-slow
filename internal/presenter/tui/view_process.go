@@ -28,10 +28,12 @@ type TableState struct {
 }
 
 // RenderProcessTable draws the interactive process list with wait-channel columns.
-func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, state *TableState, startY, width, height int) {
+func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, state *TableState, culpritPID, startY, width, height int) {
 	title := "ACTIVE PROCESSES & KERNEL WAIT-CHANNELS"
 	if state.LockedPID > 0 {
 		title = fmt.Sprintf("ACTIVE PROCESSES [🔒 LOCKED ON PID: %d — Press 'l' to Unlock]", state.LockedPID)
+	} else if culpritPID > 0 {
+		title = fmt.Sprintf("ACTIVE PROCESSES [⚠ CULPRIT PID: %d PINNED TO TOP]", culpritPID)
 	}
 	s.DrawBox(1, startY, width, height, title)
 
@@ -44,7 +46,7 @@ func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, 
 		"PID", "COMM", "STATE", "CPU%", "READ/s", "WRITE/s", "WCHAN", "CGROUP")
 	s.PrintLineAt(startY+1, 2, tableW, theme.Colorize(header, Bold+Underline))
 
-	sorted := sortProcesses(procs, state.SortMode)
+	sorted := sortProcesses(procs, state.SortMode, culpritPID)
 	maxVisibleRows := height - 3
 	if maxVisibleRows <= 0 {
 		return
@@ -64,7 +66,8 @@ func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, 
 		p := sorted[rowIdx]
 		isSelected := rowIdx == state.CursorIdx
 		isLocked := p.PID == state.LockedPID
-		renderProcessRow(s, theme, p, isSelected, isLocked, startY+2+i, tableW)
+		isCulprit := p.PID == culpritPID && culpritPID > 0
+		renderProcessRow(s, theme, p, isSelected, isLocked, isCulprit, startY+2+i, tableW)
 	}
 }
 
@@ -86,27 +89,51 @@ func trackPID(state *TableState, sorted []collector.ProcessDiff) {
 	}
 }
 
-func sortProcesses(procs []collector.ProcessDiff, mode ProcessSortMode) []collector.ProcessDiff {
+func sortProcesses(procs []collector.ProcessDiff, mode ProcessSortMode, culpritPID int) []collector.ProcessDiff {
 	copied := make([]collector.ProcessDiff, len(procs))
 	copy(copied, procs)
 
-	switch mode {
-	case SortByCPU:
-		sort.Slice(copied, func(i, j int) bool { return copied[i].CPUPercent > copied[j].CPUPercent })
-	case SortByMemory:
-		sort.Slice(copied, func(i, j int) bool { return copied[i].RSSBytes > copied[j].RSSBytes })
-	case SortByDState:
-		sort.Slice(copied, func(i, j int) bool {
+	sort.Slice(copied, func(i, j int) bool {
+		// Priority 1: Culprit PID pinned to the very top
+		if culpritPID > 0 {
+			if copied[i].PID == culpritPID && copied[j].PID != culpritPID {
+				return true
+			}
+			if copied[j].PID == culpritPID && copied[i].PID != culpritPID {
+				return false
+			}
+		}
+
+		// Priority 2: In Auto mode, prioritize D-State processes then compute/IO activity
+		if mode == SortByAuto {
 			if copied[i].State == 'D' && copied[j].State != 'D' {
 				return true
 			}
+			if copied[j].State == 'D' && copied[i].State != 'D' {
+				return false
+			}
+			scoreI := copied[i].CPUPercent*1000 + float64(copied[i].ReadBytesDelta+copied[i].WriteBytesDelta)/(1024*1024)
+			scoreJ := copied[j].CPUPercent*1000 + float64(copied[j].ReadBytesDelta+copied[j].WriteBytesDelta)/(1024*1024)
+			return scoreI > scoreJ
+		}
+
+		switch mode {
+		case SortByCPU:
 			return copied[i].CPUPercent > copied[j].CPUPercent
-		})
-	default: // Auto / IO
-		sort.Slice(copied, func(i, j int) bool {
+		case SortByMemory:
+			return copied[i].RSSBytes > copied[j].RSSBytes
+		case SortByDState:
+			if copied[i].State == 'D' && copied[j].State != 'D' {
+				return true
+			}
+			if copied[j].State == 'D' && copied[i].State != 'D' {
+				return false
+			}
+			return copied[i].CPUPercent > copied[j].CPUPercent
+		default: // IO
 			return (copied[i].ReadBytesDelta + copied[i].WriteBytesDelta) > (copied[j].ReadBytesDelta + copied[j].WriteBytesDelta)
-		})
-	}
+		}
+	})
 	return copied
 }
 
@@ -125,8 +152,11 @@ func clampScroll(state *TableState, totalRows, maxVisible int) {
 	}
 }
 
-func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelected, isLocked bool, row, tableW int) {
+func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelected, isLocked, isCulprit bool, row, tableW int) {
 	prefix := "  "
+	if isCulprit {
+		prefix = "⚠ "
+	}
 	if isLocked && isSelected {
 		prefix = "🔒▶"
 	} else if isLocked {
@@ -163,11 +193,19 @@ func renderProcessRow(s *Screen, theme *Theme, p collector.ProcessDiff, isSelect
 		prefix, p.PID, comm, p.State, p.CPUPercent, readMB, writeMB, wchan, cgroup)
 
 	if isSelected {
-		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiWhite+BgBlue))
+		if isCulprit {
+			s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiWhite+BgRed))
+		} else {
+			s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiWhite+BgBlue))
+		}
+	} else if isCulprit {
+		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiRed))
 	} else if isLocked {
 		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiYellow))
 	} else if p.State == 'D' {
 		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiRed))
+	} else if p.CPUPercent >= 50.0 {
+		s.PrintLineAt(row, 2, tableW, theme.Colorize(line, Bold+FgHiYellow))
 	} else {
 		s.PrintLineAt(row, 2, tableW, line)
 	}

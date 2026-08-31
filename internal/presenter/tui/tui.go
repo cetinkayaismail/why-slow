@@ -171,10 +171,18 @@ func updateSelectedPID(state *UIState) {
 	if state.LastDiff == nil || len(state.LastDiff.Processes) == 0 {
 		return
 	}
-	sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode)
+	culpritPID := getCulpritPID(state)
+	sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPID)
 	if state.TableState.CursorIdx < len(sorted) {
 		state.TableState.SelectedPID = sorted[state.TableState.CursorIdx].PID
 	}
+}
+
+func getCulpritPID(state *UIState) int {
+	if state.LastReport != nil && state.LastReport.PrimaryBlocker != nil {
+		return state.LastReport.PrimaryBlocker.CulpritPID
+	}
+	return 0
 }
 
 func toggleLockPID(state *UIState) {
@@ -247,18 +255,19 @@ func renderFrame(s *Screen, state *UIState, fd int) {
 
 	tableY := 6 + blockerH
 	tableH := h - tableY - 4
+	culpritPID := getCulpritPID(state)
 	if tableH > 5 && state.LastDiff != nil {
-		RenderProcessTable(s, state.Theme, state.LastDiff.Processes, &state.TableState, tableY, w, tableH)
+		RenderProcessTable(s, state.Theme, state.LastDiff.Processes, &state.TableState, culpritPID, tableY, w, tableH)
 	}
 
 	matrixY := h - 3
 	RenderRuleMatrix(s, state.Theme, state.LastReport, matrixY, w)
 
-	renderActiveModal(s, state, w, h)
+	renderActiveModal(s, state, culpritPID, w, h)
 	_ = s.Flush(os.Stdout)
 }
 
-func renderActiveModal(s *Screen, state *UIState, w, h int) {
+func renderActiveModal(s *Screen, state *UIState, culpritPID, w, h int) {
 	switch state.ActiveModal {
 	case ModalHelp:
 		RenderHelpModal(s, state.Theme, w, h)
@@ -266,7 +275,7 @@ func renderActiveModal(s *Screen, state *UIState, w, h int) {
 		RenderCausalTreeModal(s, state.Theme, state.LastReport, w, h)
 	case ModalDrilldown:
 		if state.LastDiff != nil && len(state.LastDiff.Processes) > 0 {
-			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode)
+			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPID)
 			if state.TableState.CursorIdx < len(sorted) {
 				p := sorted[state.TableState.CursorIdx]
 				RenderDrilldownModal(s, state.Theme, &p, w, h)
@@ -274,7 +283,7 @@ func renderActiveModal(s *Screen, state *UIState, w, h int) {
 		}
 	case ModalBlastRadius:
 		if state.LastDiff != nil && len(state.LastDiff.Processes) > 0 {
-			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode)
+			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPID)
 			if state.TableState.CursorIdx < len(sorted) {
 				p := sorted[state.TableState.CursorIdx]
 				impact := AssessBlastRadius(p.PID, p.Comm, state.LastDiff.Processes, state.LastReport.PrimaryBlocker)

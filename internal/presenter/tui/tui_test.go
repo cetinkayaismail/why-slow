@@ -38,21 +38,27 @@ func TestSortProcesses(t *testing.T) {
 	}
 
 	// Sort by CPU
-	byCPU := sortProcesses(procs, SortByCPU)
+	byCPU := sortProcesses(procs, SortByCPU, 0)
 	if byCPU[0].PID != 2 {
 		t.Errorf("expected top CPU PID=2, got %d", byCPU[0].PID)
 	}
 
 	// Sort by Memory
-	byMem := sortProcesses(procs, SortByMemory)
+	byMem := sortProcesses(procs, SortByMemory, 0)
 	if byMem[0].PID != 3 {
 		t.Errorf("expected top Memory PID=3, got %d", byMem[0].PID)
 	}
 
 	// Sort by IO
-	byIO := sortProcesses(procs, SortByIO)
+	byIO := sortProcesses(procs, SortByIO, 0)
 	if byIO[0].PID != 3 {
 		t.Errorf("expected top IO PID=3, got %d", byIO[0].PID)
+	}
+
+	// Priority Culprit Pinning (PID 1 pinned despite lower CPU)
+	byCulprit := sortProcesses(procs, SortByCPU, 1)
+	if byCulprit[0].PID != 1 {
+		t.Errorf("expected culprit PID 1 pinned to index 0, got PID %d", byCulprit[0].PID)
 	}
 }
 
