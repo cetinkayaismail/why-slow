@@ -153,6 +153,8 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 		updateSelectedPID(state)
 	case "l", "p": // Lock / Pin selected PID
 		toggleLockPID(state)
+	case "f", "F": // Focus & Lock directly onto Root Cause Culprit PID
+		focusCulpritPID(state)
 	case " ": // Space (Pause / Freeze)
 		state.IsFrozen = !state.IsFrozen
 	case "s": // Save report
@@ -211,6 +213,21 @@ func toggleLockPID(state *UIState) {
 	if state.TableState.SelectedPID > 0 {
 		state.TableState.LockedPID = state.TableState.SelectedPID
 	}
+}
+
+func focusCulpritPID(state *UIState) {
+	culpritPID := getCulpritPID(state)
+	if culpritPID <= 0 {
+		return
+	}
+	if state.TableState.LockedPID == culpritPID {
+		state.TableState.LockedPID = 0 // Toggle unlock if already locked
+		return
+	}
+	state.TableState.SelectedPID = culpritPID
+	state.TableState.LockedPID = culpritPID
+	state.TableState.CursorIdx = 0
+	state.TableState.ScrollIdx = 0
 }
 
 func cycleModal(state *UIState) {

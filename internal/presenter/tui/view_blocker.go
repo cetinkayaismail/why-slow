@@ -58,7 +58,7 @@ func renderEvidence(s *Screen, theme *Theme, evidence []string, startY, contentW
 
 func renderCulpritAndFix(s *Screen, theme *Theme, diag *analyzer.Diagnosis, startY, contentW int) {
 	if diag.CulpritPID > 0 {
-		culpritStr := fmt.Sprintf("• Culprit: PID %d [%s] — %s", diag.CulpritPID, diag.CulpritName, diag.CulpritDetails)
+		culpritStr := fmt.Sprintf("• Culprit: PID %d [%s] — %s   [f: Jump & Lock Cursor]", diag.CulpritPID, diag.CulpritName, diag.CulpritDetails)
 		s.PrintLineAt(startY, 3, contentW, theme.Colorize(culpritStr, Bold+FgHiYellow))
 	} else {
 		s.PrintLineAt(startY, 3, contentW, theme.Colorize("• Scope: System-wide kernel contention", Dim))

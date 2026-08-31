@@ -19,6 +19,7 @@ func RenderHelpModal(s *Screen, theme *Theme, width, height int) {
 
 	shortcuts := []string{
 		"• ↑ / ↓ or k / j    Navigate process table rows",
+		"• f                 Focus & Lock onto Root Cause Culprit PID directly",
 		"• l / p             Lock / Pin selected PID (follow across dynamic re-sorts)",
 		"• Enter             Open process telemetry drill-down modal",
 		"• Space             Freeze / Pause live differential snapshot",
