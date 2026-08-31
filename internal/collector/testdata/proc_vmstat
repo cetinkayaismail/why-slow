@@ -1,0 +1,15 @@
+nr_free_pages 128000
+pgpgin 987654
+pgpgout 123456
+pgfault 3456789
+pgmajfault 1234
+pgscan_direct 567
+allocstall_direct 89
+compact_stall 45
+compact_fail 12
+compact_success 33
+numa_miss 88
+numa_foreign 99
+numa_interleave 111
+thp_collapse_alloc 250
+thp_collapse_alloc_failed 15

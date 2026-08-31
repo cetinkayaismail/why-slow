@@ -66,6 +66,16 @@ func ParseCPUStat(path string) (CPUStatInfo, error) {
 			if len(fields) >= 2 {
 				info.ProcsBlocked, _ = strconv.ParseUint(fields[1], 10, 64)
 			}
+		} else if strings.HasPrefix(line, "ctxt ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				info.ContextSwitches, _ = strconv.ParseUint(fields[1], 10, 64)
+			}
+		} else if strings.HasPrefix(line, "processes ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				info.ProcessesCreated, _ = strconv.ParseUint(fields[1], 10, 64)
+			}
 		}
 	}
 
@@ -137,12 +147,15 @@ func ParseCPUFreq(baseDir string) (CPUFreqInfo, error) {
 
 		curFreq := readUintFromFile(filepath.Join(dir, "scaling_cur_freq"))
 		maxFreq := readUintFromFile(filepath.Join(dir, "scaling_max_freq"))
+		govBytes, _ := os.ReadFile(filepath.Join(dir, "scaling_governor"))
+		governor := strings.TrimSpace(string(govBytes))
 
 		if curFreq > 0 || maxFreq > 0 {
 			info.Cores = append(info.Cores, CoreFreq{
-				CoreID:  coreID,
-				CurFreq: curFreq,
-				MaxFreq: maxFreq,
+				CoreID:   coreID,
+				CurFreq:  curFreq,
+				MaxFreq:  maxFreq,
+				Governor: governor,
 			})
 		}
 	}

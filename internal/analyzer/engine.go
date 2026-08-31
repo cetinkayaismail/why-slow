@@ -59,9 +59,13 @@ func (e *Engine) Analyze(diff *collector.SnapshotDiff, runCtx collector.RunConte
 	for _, rule := range e.rules {
 		diag, ok := rule.Evaluate(diff)
 		if ok && diag != nil {
+			// Clock jump makes all rate-based metrics unreliable
+			if diff.ClockJumpDetected {
+				diag.Confidence *= 0.50
+			}
 			// Apply unprivileged confidence penalty for PID-dependent rules
 			if !runCtx.IsRoot && rule.IsPIDDependent() {
-				diag.Confidence *= 0.80
+				diag.Confidence *= 0.60
 			}
 			triggered = append(triggered, *diag)
 		}
@@ -74,8 +78,8 @@ func (e *Engine) Analyze(diff *collector.SnapshotDiff, runCtx collector.RunConte
 	// 2. Sort by Tier ASC -> Severity Rank DESC -> Confidence DESC
 	sortDiagnoses(triggered)
 
-	// 3. Root Cause Isolation & Demotion
-	categorizeDiagnoses(triggered, report)
+	// 3. Root Cause Isolation & Demotion (with causal suppression)
+	categorizeDiagnoses(triggered, report, e.rules)
 
 	return report
 }
@@ -112,7 +116,7 @@ func severityRank(s Severity) int {
 	}
 }
 
-func categorizeDiagnoses(sorted []Diagnosis, report *DiagnosticReport) {
+func categorizeDiagnoses(sorted []Diagnosis, report *DiagnosticReport, rules []Rule) {
 	if len(sorted) == 0 {
 		return
 	}
@@ -126,10 +130,18 @@ func categorizeDiagnoses(sorted []Diagnosis, report *DiagnosticReport) {
 		return
 	}
 
+	// Build suppression set from primary blocker and all contributing rules
+	suppressedIDs := buildSuppressionSet(primary.RuleID, rules)
+
 	report.ContributingFactors = make([]Diagnosis, 0, len(remaining))
 	report.SecondaryIssues = make([]Diagnosis, 0, len(remaining))
 
 	for _, d := range remaining {
+		// Skip rules that are suppressed by the primary blocker
+		if suppressedIDs[d.RuleID] {
+			continue
+		}
+
 		if primary.Tier == 1 {
 			// If Tier 1 hard blocker exists, Tier 2/3 findings are contributing or secondary
 			if d.Severity == SeverityCritical || d.Severity == SeverityHigh {
@@ -138,7 +150,7 @@ func categorizeDiagnoses(sorted []Diagnosis, report *DiagnosticReport) {
 				report.SecondaryIssues = append(report.SecondaryIssues, d)
 			}
 		} else {
-			if d.Tier == primary.Tier || d.Severity >= SeverityHigh {
+			if d.Tier == primary.Tier || severityRank(d.Severity) >= severityRank(SeverityHigh) {
 				report.ContributingFactors = append(report.ContributingFactors, d)
 			} else {
 				report.SecondaryIssues = append(report.SecondaryIssues, d)
@@ -146,3 +158,19 @@ func categorizeDiagnoses(sorted []Diagnosis, report *DiagnosticReport) {
 		}
 	}
 }
+
+// buildSuppressionSet returns a set of rule IDs that should be suppressed
+// based on the primary blocker's causal chain.
+func buildSuppressionSet(primaryRuleID string, rules []Rule) map[string]bool {
+	suppressed := make(map[string]bool)
+	for _, rule := range rules {
+		if rule.ID() == primaryRuleID {
+			for _, sid := range rule.Suppresses() {
+				suppressed[sid] = true
+			}
+			break
+		}
+	}
+	return suppressed
+}
+

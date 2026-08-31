@@ -54,10 +54,32 @@ func ParseCgroups(baseDir string, procs []ProcessInfo) (CgroupInfo, error) {
 			hasData = true
 		}
 
+		// Parse cpu.shares
+		cpuSharesPath := filepath.Join(fullDir, "cpu.shares")
+		if parseCPUShares(cpuSharesPath, &entry) {
+			hasData = true
+		}
+
 		// Parse memory.events
 		memEventsPath := filepath.Join(fullDir, "memory.events")
 		if parseCgroupMemEvents(memEventsPath, &entry) {
 			hasData = true
+		}
+
+		// Parse cgroup.events
+		eventsPath := filepath.Join(fullDir, "cgroup.events")
+		if parseCgroupEvents(eventsPath, &entry) {
+			hasData = true
+		}
+
+		// Parse cgroup.freeze
+		freezePath := filepath.Join(fullDir, "cgroup.freeze")
+		if parseCgroupFreeze(freezePath, &entry) {
+			hasData = true
+		}
+
+		if entry.Frozen {
+			info.Frozen = true
 		}
 
 		if hasData {
@@ -69,6 +91,37 @@ func ParseCgroups(baseDir string, procs []ProcessInfo) (CgroupInfo, error) {
 		info.Available = false
 	}
 	return info, nil
+}
+
+func parseCgroupEvents(path string, entry *CgroupEntry) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	found := false
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) >= 2 && fields[0] == "frozen" && fields[1] == "1" {
+			entry.Frozen = true
+			found = true
+		}
+	}
+	return found
+}
+
+func parseCgroupFreeze(path string, entry *CgroupEntry) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	if strings.TrimSpace(string(data)) == "1" {
+		entry.Frozen = true
+		return true
+	}
+	return false
 }
 
 func parseCgroupCPUStat(path string, entry *CgroupEntry) bool {
@@ -98,6 +151,12 @@ func parseCgroupCPUStat(path string, entry *CgroupEntry) bool {
 			found = true
 		case "nr_throttled":
 			entry.NrThrottled = val
+			found = true
+		case "nr_bursts":
+			entry.NrBursts = val
+			found = true
+		case "burst_usec":
+			entry.BurstUsec = val
 			found = true
 		}
 	}
@@ -132,7 +191,23 @@ func parseCgroupMemEvents(path string, entry *CgroupEntry) bool {
 		case "high":
 			entry.MemoryHighEvents = val
 			found = true
+		case "max":
+			entry.MemEventsMax = val
+			found = true
 		}
 	}
 	return found
+}
+
+func parseCPUShares(path string, entry *CgroupEntry) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return false
+	}
+	entry.CPUShares = val
+	return true
 }

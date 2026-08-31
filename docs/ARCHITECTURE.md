@@ -112,3 +112,30 @@ The correlation engine organizes diagnoses into three strict priority tiers to e
 │    Futex Contention, NUMA Remote Thrashing, CPU Pinning, Zombie Leaks  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🗺️ Future Plans & Autonomous Agent Architecture
+
+To support continuous enterprise monitoring without creating remote attack surfaces, the next major evolution introduces the **Autonomous Diagnostic Agent Architecture**:
+
+```mermaid
+graph TD
+    subgraph Host["Target Host / Kubernetes Node"]
+        Sentinel["why-slow Sentinel Daemon (--watch)"] -->|"In-Memory 0.02ms Analysis"| Rules["159 Diagnostic Rules"]
+        Rules -->|"Structured JSON Event"| Pipe["Local Pipe / Push Client"]
+    end
+
+    subgraph Observability["Enterprise Observability Platform"]
+        Pipe -->|"Outbound mTLS Push"| Collector["Central Diagnostic Collector"]
+        Pipe -->|"Sidecar Forwarding"| Zabbix["Zabbix Agent 2 / Vector"]
+        Pipe -->|"Read-Only Scrape"| Prom["Prometheus / OpenMetrics"]
+        Collector --> Alert["PagerDuty / Slack / SRE Dashboard"]
+    end
+```
+
+### Key Pillars of the Agent Architecture:
+1. **Outbound-Only mTLS Push**: Zero inbound TCP ports open on the target server, eliminating RCE and port scan attack surfaces.
+2. **Deterministic Resource Caps**: `< 15MB` RSS and `< 0.05%` CPU usage guarantee zero interference with colocated production databases or microservices.
+3. **Edge Root-Cause Isolation**: Evaluates raw differential telemetry in local host RAM, sending only high-confidence actionable conclusions to the central monitoring cluster.
+

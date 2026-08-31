@@ -11,6 +11,7 @@ package analyzer
 
 import (
 	"fmt"
+	"strings"
 	"why-slow/internal/collector"
 )
 
@@ -26,6 +27,10 @@ func GetTier1Rules() []Rule {
 		&RuleIOServiceLatency{},
 		&RuleTCPSocketMemoryPressure{},
 		&RuleSwapDeviceSaturation{},
+		&RuleFSReadOnlyRemount{},
+		&RuleSystemFileTableFull{},
+		&RuleGlobalOOMKillActive{},
+		&RuleConntrackTableHardDrop{},
 	}
 }
 
@@ -35,6 +40,9 @@ type RuleCPUSaturation struct{}
 func (r *RuleCPUSaturation) ID() string             { return "BASE_CPU_SATURATION" }
 func (r *RuleCPUSaturation) Tier() int              { return 1 }
 func (r *RuleCPUSaturation) IsPIDDependent() bool   { return true }
+func (r *RuleCPUSaturation) Suppresses() []string {
+	return []string{"CONT_CONTEXT_SWITCH_STORM", "CONT_SCHED_RUNQUEUE_STARVATION"}
+}
 
 func (r *RuleCPUSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -97,6 +105,9 @@ type RuleOOMDanger struct{}
 func (r *RuleOOMDanger) ID() string             { return "BASE_OOM_DANGER" }
 func (r *RuleOOMDanger) Tier() int              { return 1 }
 func (r *RuleOOMDanger) IsPIDDependent() bool   { return true }
+func (r *RuleOOMDanger) Suppresses() []string {
+	return []string{"CONT_KSWAPD_CPU_SPIN", "CONT_WORKING_SET_REFAULT_THRASHING", "CONT_SWAP_THRASHING", "CONT_MEMCG_RECLAIM_DIRECT_STALL"}
+}
 
 func (r *RuleOOMDanger) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -161,7 +172,7 @@ func findTopOOMScoreProcess(procs []collector.ProcessDiff) *collector.ProcessDif
 }
 
 // RuleDiskSpaceFull detects critical storage capacity exhaustion.
-type RuleDiskSpaceFull struct{}
+type RuleDiskSpaceFull struct{ noSuppression }
 
 func (r *RuleDiskSpaceFull) ID() string             { return "BASE_DISK_SPACE_FULL" }
 func (r *RuleDiskSpaceFull) Tier() int              { return 1 }
@@ -207,6 +218,9 @@ type RuleDiskHWSaturation struct{}
 func (r *RuleDiskHWSaturation) ID() string             { return "BASE_DISK_HARDWARE_SATURATION" }
 func (r *RuleDiskHWSaturation) Tier() int              { return 1 }
 func (r *RuleDiskHWSaturation) IsPIDDependent() bool   { return true }
+func (r *RuleDiskHWSaturation) Suppresses() []string {
+	return []string{"CONT_IO_SCHEDULER_QUEUE_LATENCY", "CONT_DSTATE_PILEUP"}
+}
 
 func (r *RuleDiskHWSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -216,6 +230,9 @@ func (r *RuleDiskHWSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 	var satDevice *collector.DiskDeviceDiff
 	for i := range diff.Disks {
 		d := &diff.Disks[i]
+		if strings.HasPrefix(d.DeviceName, "dm-") || strings.HasPrefix(d.DeviceName, "loop") {
+			continue
+		}
 		if d.UtilPercent >= 95.0 {
 			if satDevice == nil || d.UtilPercent > satDevice.UtilPercent {
 				satDevice = d
@@ -265,7 +282,7 @@ func findTopWriterProcess(procs []collector.ProcessDiff) *collector.ProcessDiff 
 }
 
 // RuleThermalThrottling detects hardware CPU throttling due to thermal overheating.
-type RuleThermalThrottling struct{}
+type RuleThermalThrottling struct{ noSuppression }
 
 func (r *RuleThermalThrottling) ID() string             { return "BASE_THERMAL_THROTTLING" }
 func (r *RuleThermalThrottling) Tier() int              { return 1 }
@@ -314,7 +331,7 @@ func (r *RuleThermalThrottling) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 }
 
 // RuleInodeExhaustion detects filesystem inode table exhaustion.
-type RuleInodeExhaustion struct{}
+type RuleInodeExhaustion struct{ noSuppression }
 
 func (r *RuleInodeExhaustion) ID() string             { return "BASE_INODE_EXHAUSTION" }
 func (r *RuleInodeExhaustion) Tier() int              { return 1 }
@@ -355,7 +372,7 @@ func (r *RuleInodeExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 }
 
 // RuleIOServiceLatency detects excessive block I/O service latencies on SAN/EBS/NVMe volumes.
-type RuleIOServiceLatency struct{}
+type RuleIOServiceLatency struct{ noSuppression }
 
 func (r *RuleIOServiceLatency) ID() string             { return "BASE_IO_SERVICE_LATENCY" }
 func (r *RuleIOServiceLatency) Tier() int              { return 1 }
@@ -405,7 +422,7 @@ func (r *RuleIOServiceLatency) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 }
 
 // RuleTCPSocketMemoryPressure detects kernel TCP socket buffer exhaustion and connection aborts.
-type RuleTCPSocketMemoryPressure struct{}
+type RuleTCPSocketMemoryPressure struct{ noSuppression }
 
 func (r *RuleTCPSocketMemoryPressure) ID() string             { return "BASE_TCP_SOCKET_MEM_PRESS" }
 func (r *RuleTCPSocketMemoryPressure) Tier() int              { return 1 }
@@ -445,7 +462,7 @@ func (r *RuleTCPSocketMemoryPressure) Evaluate(diff *collector.SnapshotDiff) (*D
 }
 
 // RuleSwapDeviceSaturation detects swap storage subsystem saturation from massive page in/out traffic.
-type RuleSwapDeviceSaturation struct{}
+type RuleSwapDeviceSaturation struct{ noSuppression }
 
 func (r *RuleSwapDeviceSaturation) ID() string             { return "BASE_SWAP_DEVICE_SATURATION" }
 func (r *RuleSwapDeviceSaturation) Tier() int              { return 1 }
@@ -483,3 +500,153 @@ func (r *RuleSwapDeviceSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diag
 		Remediation: "Reduce system memory footprint, tune vm.swappiness (sysctl -w vm.swappiness=10), or configure zram / fast NVMe swap storage.",
 	}, true
 }
+
+// RuleFSReadOnlyRemount detects when a critical filesystem mount has been remounted read-only due to underlying errors.
+type RuleFSReadOnlyRemount struct{ noSuppression }
+
+func (r *RuleFSReadOnlyRemount) ID() string           { return "BASE_FS_READONLY_REMOUNT" }
+func (r *RuleFSReadOnlyRemount) Tier() int            { return 1 }
+func (r *RuleFSReadOnlyRemount) IsPIDDependent() bool { return false }
+
+func (r *RuleFSReadOnlyRemount) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || diff.LatestSnapshot == nil {
+		return nil, false
+	}
+
+	for _, mount := range diff.LatestSnapshot.DiskSpace.Mounts {
+		if mount.ReadOnly && (mount.Path == "/" || mount.Path == "/var" || mount.Path == "/tmp" || mount.Path == "/home" || mount.Path == "/data") {
+			return &Diagnosis{
+				RuleID:      r.ID(),
+				Tier:        1,
+				Severity:    SeverityCritical,
+				Confidence:  0.98,
+				Title:       fmt.Sprintf("Critical Filesystem Remounted Read-Only (%s)", mount.Path),
+				Explanation: fmt.Sprintf("Filesystem on '%s' has been remounted Read-Only (ro) by the kernel, blocking all file writes, creations, and log output.", mount.Path),
+				Evidence: []string{
+					fmt.Sprintf("Mount Path: %s", mount.Path),
+					"Mount Status: Read-Only (ro)",
+				},
+				Remediation: fmt.Sprintf("Inspect kernel dmesg for I/O errors or filesystem corruption on %s, unmount cleanly, and execute filesystem check (fsck).", mount.Path),
+			}, true
+		}
+	}
+
+	return nil, false
+}
+
+// RuleSystemFileTableFull detects when the global Linux file table (/proc/sys/fs/file-nr) is 100% full.
+type RuleSystemFileTableFull struct{}
+
+func (r *RuleSystemFileTableFull) ID() string           { return "BASE_SYSTEM_FILE_TABLE_FULL" }
+func (r *RuleSystemFileTableFull) Tier() int            { return 1 }
+func (r *RuleSystemFileTableFull) IsPIDDependent() bool { return false }
+func (r *RuleSystemFileTableFull) Suppresses() []string {
+	return []string{"CONT_FD_EXHAUSTION"}
+}
+
+func (r *RuleSystemFileTableFull) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || diff.LatestSnapshot == nil {
+		return nil, false
+	}
+
+	fnr := &diff.LatestSnapshot.SystemConfig.FileNR
+	if !fnr.Available || fnr.Max == 0 {
+		return nil, false
+	}
+
+	ratio := float64(fnr.Allocated) / float64(fnr.Max)
+	if ratio >= 0.99 && fnr.Allocated >= 1000 {
+		return &Diagnosis{
+			RuleID:      r.ID(),
+			Tier:        1,
+			Severity:    SeverityCritical,
+			Confidence:  0.98,
+			Title:       "Global Operating System Open File Table Full (ENFILE)",
+			Explanation: fmt.Sprintf("System-wide open file table is 100%% saturated (%d / %d max allocated), causing all system processes to fail open(), socket(), and accept() calls with ENFILE.", fnr.Allocated, fnr.Max),
+			Evidence: []string{
+				fmt.Sprintf("Global Allocated File Handles: %d / %d max (%.1f%% allocated)", fnr.Allocated, fnr.Max, ratio*100),
+				"System-wide open() and accept() calls failing with ENFILE across all processes",
+			},
+			Remediation: "Increase OS global file limit: sysctl -w fs.file-max=2097152 or terminate rogue processes holding abandoned file descriptors.",
+		}, true
+	}
+
+	return nil, false
+}
+
+// RuleGlobalOOMKillActive detects when the host kernel OOM killer was actively triggered during the sampling window.
+type RuleGlobalOOMKillActive struct{}
+
+func (r *RuleGlobalOOMKillActive) ID() string           { return "BASE_GLOBAL_OOM_KILL_ACTIVE" }
+func (r *RuleGlobalOOMKillActive) Tier() int            { return 1 }
+func (r *RuleGlobalOOMKillActive) IsPIDDependent() bool { return false }
+func (r *RuleGlobalOOMKillActive) Suppresses() []string {
+	return []string{"BASE_OOM_DANGER", "CONT_KSWAPD_CPU_SPIN"}
+}
+
+func (r *RuleGlobalOOMKillActive) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil {
+		return nil, false
+	}
+
+	oomKills := diff.VMStat.OOMKillDelta
+	if oomKills == 0 {
+		return nil, false
+	}
+
+	evidence := []string{
+		fmt.Sprintf("Host Kernel OOM Kills Delta: %d processes killed", oomKills),
+		"Kernel out-of-memory killer actively invoked to prevent OS freeze",
+	}
+
+	return &Diagnosis{
+		RuleID:      r.ID(),
+		Tier:        1,
+		Severity:    SeverityCritical,
+		Confidence:  0.99,
+		Title:       "Host Linux Kernel Out-Of-Memory (OOM) Killer Invoked",
+		Explanation: fmt.Sprintf("Kernel OOM killer terminated %d host processes during the sampling window to recover physical RAM and prevent kernel panic.", oomKills),
+		Evidence:    evidence,
+		Remediation: "Inspect kernel dmesg to identify killed PIDs, provision additional RAM or swap space, and apply cgroup memory limits to memory-heavy workloads.",
+	}, true
+}
+
+// RuleConntrackTableHardDrop detects when Netfilter conntrack table is 100% full, causing total connection drops.
+type RuleConntrackTableHardDrop struct{}
+
+func (r *RuleConntrackTableHardDrop) ID() string           { return "BASE_CONNTRACK_TABLE_HARD_DROP" }
+func (r *RuleConntrackTableHardDrop) Tier() int            { return 1 }
+func (r *RuleConntrackTableHardDrop) IsPIDDependent() bool { return false }
+func (r *RuleConntrackTableHardDrop) Suppresses() []string {
+	return []string{"CONT_CONNTRACK_EXHAUSTION"}
+}
+
+func (r *RuleConntrackTableHardDrop) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || diff.LatestSnapshot == nil {
+		return nil, false
+	}
+
+	ct := &diff.LatestSnapshot.SystemConfig.Conntrack
+	if !ct.Available || ct.Max == 0 {
+		return nil, false
+	}
+
+	if ct.Ratio >= 0.995 && ct.Count >= ct.Max {
+		return &Diagnosis{
+			RuleID:      r.ID(),
+			Tier:        1,
+			Severity:    SeverityCritical,
+			Confidence:  0.97,
+			Title:       "Netfilter Conntrack Table 100% Full (Packet Drop Blackhole)",
+			Explanation: fmt.Sprintf("Netfilter connection tracking table has reached absolute capacity (%d / %d sessions), silently dropping all new incoming and outbound TCP/UDP connections at the PREROUTING hook.", ct.Count, ct.Max),
+			Evidence: []string{
+				fmt.Sprintf("Active Conntrack Sessions: %d / %d max (100.0%% full)", ct.Count, ct.Max),
+				"Kernel netfilter dropping all new connections before socket processing",
+			},
+			Remediation: "Immediately enlarge conntrack table: sysctl -w net.netfilter.nf_conntrack_max=1048576 and reduce net.netfilter.nf_conntrack_tcp_timeout_established=600.",
+		}, true
+	}
+
+	return nil, false
+}
+

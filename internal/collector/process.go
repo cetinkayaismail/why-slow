@@ -204,6 +204,11 @@ func parseProcStatLine(line string, expectedPID int) (ProcessInfo, bool) {
 	numThreads, _ := strconv.Atoi(afterComm[17])
 	rssPages, _ := strconv.ParseUint(afterComm[21], 10, 64)
 
+	var policy int
+	if len(afterComm) > 38 {
+		policy, _ = strconv.Atoi(afterComm[38])
+	}
+
 	// Standard Linux page size is 4KB (4096 bytes)
 	rssBytes := rssPages * uint64(os.Getpagesize())
 
@@ -216,6 +221,7 @@ func parseProcStatLine(line string, expectedPID int) (ProcessInfo, bool) {
 		STime:      stime,
 		NumThreads: numThreads,
 		RSSBytes:   rssBytes,
+		Policy:     policy,
 	}, true
 }
 
@@ -324,7 +330,32 @@ func readProcessStatus(pidDir string, info *ProcessInfo) {
 			if len(fields) >= 2 {
 				info.CpusAllowed = countBitsInHexMask(fields[1])
 			}
-			break
+		} else if strings.HasPrefix(line, "TracerPid:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				tracerPID, _ := strconv.Atoi(fields[1])
+				info.TracerPID = tracerPID
+			}
+		} else if strings.HasPrefix(line, "SigQ:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if qStr, maxStr, ok := strings.Cut(fields[1], "/"); ok {
+					q, _ := strconv.ParseUint(qStr, 10, 64)
+					m, _ := strconv.ParseUint(maxStr, 10, 64)
+					info.SigQQueued = q
+					info.SigQMax = m
+				}
+			}
+		} else if strings.HasPrefix(line, "voluntary_ctxt_switches:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				info.VoluntaryCtxtSwitches, _ = strconv.ParseUint(fields[1], 10, 64)
+			}
+		} else if strings.HasPrefix(line, "nonvoluntary_ctxt_switches:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				info.NonvoluntaryCtxtSwitches, _ = strconv.ParseUint(fields[1], 10, 64)
+			}
 		}
 	}
 }

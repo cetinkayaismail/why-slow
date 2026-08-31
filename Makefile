@@ -16,9 +16,14 @@ fmt:
 
 test:
 	go vet ./cmd/... ./internal/...
+	go test -race -count=1 ./internal/...
+	go test -race -count=1 ./internal_tests/battle_test.go
 
 test-internal:
-	go test -race -count=1 ./internal_tests/analyzer/... ./internal_tests/collector/... ./internal_tests/presenter/...
+	go test -race -count=1 ./internal/...
+
+test-battle:
+	go test -v -race -count=1 ./internal_tests/battle_test.go
 
 clean:
 	rm -rf bin/ /tmp/why-slow*

@@ -3,6 +3,293 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.20.0] - 2026-08-31
+
+### Added
+- **Causal Rule Suppression Graph**:
+  - `Suppresses() []string` on Rule interface to filter out cascading downstream symptoms when primary root causes fire (e.g. `BASE_OOM_DANGER` suppresses `CONT_KSWAPD_CPU_SPIN`, `CONT_SWAP_THRASHING`, and `CONT_MEMCG_RECLAIM_DIRECT_STALL`).
+- **New Diagnostic Rules**:
+  - `CONT_TCP_CLOSE_WAIT_LEAK` (Tier 2 High) — Detects accumulated unclosed TCP socket file descriptors.
+  - `CONT_SUSTAINED_LOAD_SATURATION` (Tier 2 High) — Identifies multi-minute sustained load average saturation, distinguishing true persistent compute starvation from transient 1s burst spikes.
+- **New Telemetry Data Sources**:
+  - `/proc/loadavg` parser (`internal/collector/loadavg.go`) capturing 1m, 5m, 15m system load and entity counts.
+  - `/proc/net/tcp` & `/proc/net/tcp6` state classifier (`internal/collector/tcp_sockets.go`) extracting socket counts across all kernel states.
+  - `/proc/sys/vm/` parser (`internal/collector/vm_config.go`) capturing `overcommit_memory` and `swappiness`.
+- **Multi-Sample Statistical Aggregation Mode (`--samples N`)**:
+  - Field-by-field median reduction across multi-snapshot sequences (`internal/collector/median.go`) eliminating transient microsecond spikes.
+- **Continuous Sentinel Watch Mode (`--watch` & `--alert-threshold`)**:
+  - Background daemon loop continuously evaluating system bottlenecks and alerting on threshold breaches.
+
+### Fixed
+- **Guest CPU Double-Count**: Removed duplicate `Guest` and `GuestNice` summation in `CoreCPUStat.Total()` ensuring accurate CPU utilization calculation on virtualized hosts.
+- **Clock Jump Anomaly Handling**: Added `ClockJumpDetected` flag to `SnapshotDiff` and applied 50% confidence penalty on backwards clock jumps (NTP/VM resume).
+- **Graceful Snapshot Degradation**: Removed hard `os.Exit(1)` on snapshot read errors in CLI loop.
+
+## [0.19.0] - 2026-08-26
+
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 149 to 157 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_PSI_SOME_IO_PRESSURE_SPIKE` (High) — PSI I/O `some` avg10 $\ge 25.0\%$ indicating severe storage queue delays.
+    - `CONT_PSI_SOME_CPU_PRESSURE_SPIKE` (High) — PSI CPU `some` avg10 $\ge 30.0\%$ indicating runnable tasks stalled on CPU runqueues.
+    - `CONT_PSI_FULL_MEMORY_PRESSURE_SPIKE` (High) — PSI Memory `full` avg10 $\ge 15.0\%$ indicating total system stall during paging.
+    - `CONT_PIPE_READ_BURST_BLOCK` (High) — Process blocked in D-state in `pipe_read`/`fifo_read` waiting on upstream producer.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_EPOLL_POLL_TIMEOUT_BURST` (Medium) — Worker threads repeatedly timing out in epoll without servicing requests.
+    - `EDGE_NET_TCP_SYN_FLOOD_DROP` (Medium) — Kernel rejected incoming SYN cookie handshakes due to cryptographic hash mismatches.
+    - `EDGE_SYSFS_POWER_THROTTLE_EVENT` (Medium) — Hardware RAPL package power capping throttling CPU turbo boost frequencies.
+    - `EDGE_PROC_ZOMBIE_PARENT_DEADLOCK` (Medium) — Supervisor process stuck in `wait4` while $\ge 10$ zombie children accumulate.
+- **Massive Sequential Stress Testing & Docker Harness Suite**:
+  - `internal_tests/stress_massive_test.go`: 5,000 synthetic PIDs scan benchmark (6.0ms execution, 0.05MB allocation), ghost PID churn, 300 deep cgroups, compound multi-tier failure storms, and 100-pass zero memory leak audit (< 0.1MB growth).
+  - `internal_tests/docker/run_sequential_docker_tests.sh`: Strictly one-by-one live Docker container stress tests with resource caps (`--cpus=1.0`, `--memory=256m`).
+
+## [0.18.0] - 2026-08-26
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 141 to 149 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_MEMCG_RECLAIM_DIRECT_STALL` (High) — Process stalled in D-state in synchronous cgroup memory direct reclaim (`try_to_free_mem_cgroup_pages`).
+    - `CONT_XFS_ALLOC_BTREE_CONTENTION` (High) — High-concurrency allocation group btree lock contention on XFS.
+    - `CONT_SCHED_MIGRATION_COST_OVERHEAD` (High) — Kernel `sched_migration_cost_ns` set to 0 ns causing aggressive task migration cache thrashing.
+    - `CONT_NET_TCP_ZERO_WINDOW_ADVERT` (High) — Host advertised zero receive window to remote peers freezing incoming data streams.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_MEM_SLAB_DENTRY_PRESSURE` (Medium) — Unevictable slab dentry/inode cache memory bloat under active direct page scans.
+    - `EDGE_NET_IP_REASM_TIMEOUT_STALL` (Medium) — Fragmented IP packet reassembly timer timeouts dropping packets under UDP/tunnel traffic.
+    - `EDGE_MEM_MIN_WATERMARK_BOUNCE` (Medium) — Kernel page allocator bouncing on low watermarks with high direct page scans.
+    - `EDGE_PROC_COMM_SWITCH_TRUNCATION` (Medium) — High thread churn with continuous process command renaming causing mmap_lock/creds serialization.
+
+## [0.17.0] - 2026-08-26
+
+### Added
+- **3 New Tier 1 Hard Capacity Limits** (expanding diagnostic catalog from 130 to 133 rules):
+  - `BASE_SYSTEM_FILE_TABLE_FULL` (Critical) — Global Linux open file table is 100% full (`/proc/sys/fs/file-nr`), failing all process `open()` and `socket()` calls with `ENFILE`.
+  - `BASE_GLOBAL_OOM_KILL_ACTIVE` (Critical) — Host Linux kernel Out-Of-Memory killer actively invoked (`/proc/vmstat` `oom_kill` delta > 0) to prevent OS lockup.
+  - `BASE_CONNTRACK_TABLE_HARD_DROP` (Critical) — Netfilter conntrack table 100% saturated (`nf_conntrack_count == nf_conntrack_max`), dropping all new incoming and outbound connections at the PREROUTING hook.
+- **Collector Telemetry Additions**:
+  - `/proc/sys/fs/file-nr`: Added `ParseFileNR` returning `FileNRInfo` (`Allocated`, `Unused`, `Max`).
+  - `/proc/vmstat`: Added `oom_kill` parsing into `OOMKill` and `OOMKillDelta`.
+
+## [0.16.0] - 2026-08-26
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 122 to 130 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_SCHED_AUTOGROUP_STARVATION` (High) — CFS autogroup scheduler session fairness starvation on multi-threaded server tasks (`kernel.sched_autogroup_enabled`).
+    - `CONT_FTRACE_RING_BUFFER_STALL` (High) — Active ftrace/tracepoint event recording saturated trace ring buffers, stalling syscalls on tracing locks.
+    - `CONT_NET_DEV_GRO_CELL_DROP` (High) — Generic Receive Offload (GRO) cell buffer overflow in kernel softnet layer with NAPI budget time squeezes.
+    - `CONT_MEM_COMPACT_MIGRATION_FAIL_RATE` (High) — Direct memory compaction page migration failure rate (>= 50% failures), wasting CPU without creating contiguous 2MB blocks.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_SPIN` (Medium) — Transparent HugePage zero-page read-fault lock contention and CPU spin under sparse memory allocations.
+    - `EDGE_SYSFS_CPU_HOTPLUG_LOCK_CONTENTION` (Medium) — Dynamic CPU hotplugging or governor transitions hold `cpu_hotplug_lock` / `cpuset_mutex`, stalling thread dispatch.
+    - `EDGE_NET_IP_MULTICAST_IGMP_REPORT_STALL` (Medium) — IP Multicast / UDP Broadcast socket buffer drops degrading cluster discovery and broadcast replication.
+    - `EDGE_PROC_PID_TASK_PTHREAD_LIMIT` (Medium) — Process spawned high thread counts (>= 500 threads) approaching system thread ceilings and virtual memory limits.
+- **Collector Telemetry Additions**:
+  - `/proc/vmstat`: Added `thp_zero_page_alloc` parsing into `THPZeroPageAlloc` and `THPZeroPageAllocDelta`.
+  - `/proc/sys/kernel/threads-max`: Added `ParseThreadsMax` into `ThreadsMax`.
+
+## [0.15.0] - 2026-08-26
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 114 to 122 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_DIRTY_PAGES_DIRECT_SYNC_STALL` (High) — Unwritten dirty page cache accumulation forced processes into synchronous blocking page writeback (`sync_inodes` / `wait_on_page_writeback`).
+    - `CONT_NFS_RPC_SLOT_TABLE_SATURATION` (High) — NFS client RPC transport slots exhausted (`nfs_wait_client` / `rpc_wait_bit_killable`) or remote NFS server unresponsive.
+    - `CONT_UNIX_SOCKET_BACKLOG_OVERFLOW` (High) — Local UNIX domain socket buffer queues filled to capacity (`unix_stream_sendmsg`), blocking client threads.
+    - `CONT_VFS_INODE_LOCK_CONTENTION` (High) — Multiple processes serializing on directory/file inode mutex locks during parallel file writeback (`inode_lock_shared` / `ext4_file_write_iter`).
+    - `CONT_KERNEL_LOCKD_BLOCKED` (High) — Process blocked waiting for POSIX file lock acquisition (fcntl / flock) held by another process.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_HUGETLB_VMA_MISALIGN_FAULT` (Medium) — Application generated 2MB hugepage page faults with high allocation fallback rates due to unaligned virtual memory mappings.
+    - `EDGE_TCP_CHRONIC_RTO_COLLAPSE` (Medium) — TCP connections experienced repeated Retransmission Timeout timer expirations, collapsing congestion window to 1 MSS.
+    - `EDGE_MEMCG_SOCK_MEMORY_THROTTLE` (Medium) — Container socket buffers charged against memory cgroup limits, incurring soft-limit throttling.
+- **Collector Telemetry Additions**:
+  - `/proc/vmstat`: Added `nr_dirty` parsing into `NRDirty` and `NRDirtyDelta`.
+  - `/proc/net/netstat`: Added `TCPTimeouts` and `TCPSpuriousRtxHost` parsing into `TCPTimeoutsDelta` and `TCPSpuriousRtxHostDelta`.
+
+## [0.14.0] - 2026-08-26
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 106 to 114 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_NET_TCP_COLLAPSE_PRUNE` (High) — TCP receive queue pruning and memory collapse (`TCPRcvCollapsed`) under socket memory limits.
+    - `CONT_NET_TCP_MEMORY_ALLOC_FAIL` (High) — TCP socket page allocation failures and connection aborts (`TCPAbortOnMemory`) under `tcp_mem` ceiling.
+    - `CONT_NET_TCP_ZERO_WINDOW_DROP` (High) — TCP receive zero-window advertising and window probe freezes (`TCPZeroWindowDrop`).
+    - `CONT_FUTEX_PI_DEADLOCK_STALL` (High) — Process blocked on Priority-Inheritance / robust futexes (`futex_lock_pi`, `rt_mutex_slowlock`).
+    - `CONT_NET_ARP_TABLE_TRASH` (High) — ARP / Neighbor table near capacity (>= 85% of `gc_thresh3`).
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_THP_SCAN_EXHAUSTION_STALL` (Medium) — Background `khugepaged` daemon scan exhaustion (`thp_scan_exceed`) under memory fragmentation.
+    - `EDGE_NET_DEV_TX_QUEUE_TIMEOUT` (Medium) — Network interface driver transmit queue watchdog timeouts and hardware drops (`tx_errors`).
+    - `EDGE_CGROUP_CPU_CORE_PIN_STARVATION` (Medium) — Container process pinned to 1 CPU core via `cpuset.cpus` while host is largely idle.
+- **Collector Telemetry & Worker Lifecycle**:
+  - `internal/collector/process.go`: Verified clean worker goroutine termination with `TestWorkerGoroutineCleanup` (0 leaked goroutines).
+  - `/proc/vmstat`: Added `thp_scan_exceed` parsing into `THPScanExceed` and `THPScanExceedDelta`.
+  - `/sys/class/net/<iface>/statistics/`: Added `tx_errors` reading into `TxErrors` and `TxErrorsDelta`.
+
+## [0.13.0] - 2026-08-26
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 98 to 106 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_UDP_SNDBUF_EXHAUSTION` (High) — Outbound UDP socket transmit buffer exhaustion (`Udp: SndbufErrors`) causing syslog/StatsD/DNS packet drops.
+    - `CONT_CGROUP_V1_CPU_SHARES_STARVATION` (High) — Container cgroup with relative weight (`cpu.shares <= 64`) severely starved under host CPU contention.
+    - `CONT_HUGEPAGE_LEAK_NO_REUSE` (High) — Reserved explicit HugePages (`vm.nr_hugepages`) locking >= 25% RAM while remaining abandoned after process crash.
+    - `CONT_NET_TCP_ABORT_ON_CLOSE` (High) — Sockets closed with unread receive buffer data triggering kernel TCP RST packet generation (`TCPAbortOnClose`).
+    - `CONT_SCHED_YIELD_SPIN_CHURN` (High) — Process worker threads tight-spinning on `sched_yield()` generating >= 15k/s voluntary context switches at high CPU.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_NET_DEV_RX_NO_BUFFERS` (Medium) — Network device driver RX descriptor ring pool exhausted (`rx_missed_errors` / `rx_fifo_errors`) dropping frames at DMA layer.
+    - `EDGE_TRANSPARENT_HUGEPAGE_DEFRAG_ALWAYS` (Medium) — Aggressive synchronous `[always]` THP defragmentation mode locking CPU in direct 2MB page compaction stalls.
+    - `EDGE_CGROUP_MEMORY_MAX_OOM_STALL` (Medium) — Cgroup v2 `memory.max` ceiling hit forcing synchronous container direct reclaim stalls before OOM kills.
+- **Collector Telemetry Additions**:
+  - `/proc/net/netstat`: Added `TCPAbortOnClose` parsing and deltas.
+  - `/sys/kernel/mm/transparent_hugepage/defrag`: Added `ParseTHPDefrag` for synchronous defragmentation mode detection.
+  - `/sys/class/net/<iface>/statistics/`: Added `rx_missed_errors` and `rx_fifo_errors` parsing.
+  - `/proc/[pid]/status`: Added `voluntary_ctxt_switches:` and `nonvoluntary_ctxt_switches:` parsing.
+  - `/sys/fs/cgroup/**`: Added `cpu.shares` and `memory.events` `max` parsing.
+
+## [0.12.0] - 2026-08-26
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 90 to 98 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_AIO_EVENT_LIMIT_SATURATION` (High) — Linux kernel asynchronous I/O event table (`aio-nr / aio-max-nr >= 90%`) saturated by database/storage workloads, risking EAGAIN syscall errors.
+    - `CONT_KSWAPD_CPU_SPIN` (High) — Background memory reclamation daemon `kswapd` burning CPU in page scans without restoring watermarks, stalling application allocations.
+    - `CONT_MD_RAID_RESYNC_STALL` (High) — Linux Software RAID (`mdadm` / `/dev/md*`) background resync/rebuild/scrub operations saturating disk channels with high service latency.
+    - `CONT_NET_OUT_OF_ORDER_STALL` (High) — Out-of-Order TCP segment flood overflowing socket reassembly queues, triggering receive buffer pruning collapses and throughput collapse.
+    - `CONT_POSIX_RTSIG_QUEUE_SATURATION` (High) — Process POSIX real-time signal queue (`SigQ`) near limit (>= 85%), risking dropped signals or notification delays.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_IP_FRAG_REASM_DROPS` (Medium) — IP fragment reassembly failures and timeouts caused by MTU mismatches or packet drops on UDP/DNS/overlay networks.
+    - `EDGE_CGROUP_V2_FREEZE_HANG` (Medium) — Container / Cgroup v2 subtree frozen via `cgroup.freeze`, suspending process execution in kernel space.
+    - `EDGE_SYSV_SHM_SEGMENT_LIMIT` (Medium) — System V shared memory segment table (`shmmni` / `shmall`) near capacity (>= 90%), risking shmget() ENOSPC/ENOMEM failures.
+- **Collector Telemetry Additions**:
+  - `/proc/sys/fs/aio-nr` & `/proc/sys/fs/aio-max-nr`: Added `ParseAIO` for kernel async I/O request table monitoring.
+  - `/proc/sysvipc/shm` & `/proc/sys/kernel/shm*`: Added `ParseSysVShm` for SysV shared memory segments and limit tracking.
+  - `/proc/mdstat`: Added `ParseMDStat` for active software RAID resync/rebuild detection.
+  - `/proc/net/netstat`: Added `TCPOFOQueue`, `TCPOFODrop`, `TCPOFOMerge` metrics.
+  - `/proc/net/snmp`: Added `ParseIPSNMP` parsing `Ip: ReasmReqds`, `ReasmFails`, `ReasmTimeout`, `ReasmOKs`.
+  - `/proc/[pid]/status`: Added `SigQ` queued/max signal parsing in `readProcessStatus`.
+  - `/sys/fs/cgroup/**`: Added `cgroup.events` (`frozen 1`) and `cgroup.freeze` (`1`) parsing.
+
+## [0.11.0] - 2026-08-24
+
+### Added
+- **6 New Diagnostic Rules** (expanding diagnostic catalog from 84 to 90 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_DM_QUEUE_CONGESTION` (High) — Virtual device-mapper queue (LVM / LUKS / dm-thin) saturated with high write latency and in-flight I/O requests.
+    - `CONT_TCP_SYN_COOKIE_FLOOD_STALL` (High) — Inbound SYN backlog saturated forcing fallback to cryptographic SYN cookies and disabling advanced TCP options (Window Scaling, SACK).
+    - `CONT_EPOLL_WAKEUP_CONTENTION` (High) — Multi-worker event loop thundering herd wakeup storms in `epoll_wait` driving high context switch churn and kernel CPU overhead.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_NET_IFACE_CARRIER_FLAP` (Medium) — Network interface rapidly flapping link state with hardware/CRC alignment errors.
+    - `EDGE_THP_ALLOC_FALLBACK_STALL` (Medium) — Kernel Transparent HugePage allocation aborts due to physical fragmentation, falling back to 512x 4KB split allocations and direct reclaim stalls.
+    - `EDGE_SCHED_MIGRATION_BOUNCE` (Medium) — Aggressive CPU scheduler NUMA task migration churn caused by excessively low `sched_migration_cost_ns`.
+- **Collector Telemetry Additions**:
+  - `/sys/class/net/**`: Added `CollectNetIfaces` parsing `carrier_changes`, `operstate`, `rx_crc_errors`, `tx_carrier_errors`, `rx_errors`.
+  - `/proc/diskstats`: Enabled monitoring of `dm-*` mapper and `loop*` block devices.
+  - `/proc/net/netstat`: Added `SyncookiesSent`, `SyncookiesRecv`, `SyncookiesFailed` metrics parsing.
+  - `/proc/vmstat`: Added `thp_fault_fallback` and `thp_fault_alloc` metrics parsing.
+  - `/proc/sys/kernel/sched_migration_cost_ns`: Added scheduler cache migration cost parsing.
+
+## [0.10.0] - 2026-08-24
+
+### Added
+- **6 New Diagnostic Rules** (expanding diagnostic catalog from 78 to 84 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_AUDITD_BACKLOG_WAIT_STALL` (High) — Linux Audit subsystem backlog queue saturation causing processes to block synchronously in kernel space during syscall execution.
+    - `CONT_TCP_SNDBUF_EXHAUSTION` (High) — Outbound TCP socket send buffer exhaustion stalling network write syscalls and worker event loops.
+    - `CONT_XFS_AIL_PUSH_STALL` (High) — High XFS filesystem metadata churn filling journal log and serializing transaction reservations during AIL pushes.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_INOTIFY_QUEUE_OVERFLOW` (Medium) — Inotify event queue size (`max_queued_events`) undersized relative to active watch tables during high event churn, risking silent dropped events.
+    - `EDGE_CGROUP_CFS_BURST_STARVATION` (Medium) — Cgroup v2 CFS CPU burst credit depletion causing latency-sensitive workloads to abruptly suffer hard CPU throttling.
+    - `EDGE_ZSWAP_COMPRESSOR_CONTENTION` (Medium) — Linux Zswap memory compression pool saturation and reject stalls causing direct reclaim churn and high kernel CPU overhead.
+- **Collector Telemetry Additions**:
+  - `/sys/fs/cgroup/.../cpu.stat`: Added `nr_bursts` and `burst_usec` metrics parsing for Cgroup v2 CPU burst monitoring.
+  - `/proc/meminfo`: Added `Zswap` and `Zswapped` metrics parsing.
+  - `/proc/vmstat`: Added `zswpin`, `zswpout`, and `zswap_reject_reclaim_fail` counters and deltas.
+  - `/proc/sys/fs/inotify/max_queued_events`: Added inotify queue ceiling parsing.
+  - `/proc/net/netstat`: Added `TCPSlowStartRetrans` parsing and deltas.
+- **Core Engine Fix**:
+  - Fixed severity level comparison in `engine.go` `categorizeDiagnoses` to prevent string lexicographical ordering anomalies on `SeverityMedium`.
+
+## [0.9.0] - 2026-08-23
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 70 to 78 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_SYSV_SEMAPHORE_LIMIT` (High) — System V IPC semaphore table capacity (`SEMMNS` / `SEMMNI`) saturated, blocking database connection pooling and process spawning.
+    - `CONT_TCP_TIMEWAIT_BUCKET_OVERFLOW` (High) — Kernel TCP TIME_WAIT bucket table saturated (`TCPTimeWaitOverflowDelta > 0` or `>= 85%` `tcp_max_tw_buckets`), causing new connection drops.
+    - `CONT_CGROUP_IO_THROTTLE_STALL` (High) — Containerized processes heavily throttled by Cgroup v2 `io.max` IOPS/bandwidth limits under high PSI I/O pressure (`Full >= 10%`).
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_TCP_PAWS_DROP` (Medium) — Inbound TCP segments rejected due to Protection Against Wrapped Sequences (PAWS) timestamp collisions through NAT gateways (`PAWSEstab`/`PAWSPassive`).
+    - `EDGE_CMA_ZONE_EXHAUSTION` (Medium) — Contiguous Memory Allocator (CMA) pool depleted (`CmaFree <= 5%` of `CmaTotal`), failing device driver DMA allocations.
+    - `EDGE_LOOP_DEVICE_SERIALIZATION` (Medium) — Loopback storage device (`/dev/loopX`) at `>= 80%` utilization, bottlenecking container/squashfs image I/O through single-threaded kernel workers.
+    - `EDGE_RT_SCHED_THROTTLING` (Medium) — Real-time priority task (`SCHED_FIFO`/`SCHED_RR`) consuming `>= 90%` CPU and hitting kernel `sched_rt_runtime_us` safety limiter.
+    - `EDGE_NUMA_AUTO_BALANCING_SCAN_STALL` (Medium) — Kernel automatic NUMA balancing page table scanning consuming high system CPU (`>= 10%`) scanning memory mappings (`>= 20k` PTE updates).
+- **Extended Collectors**:
+  - `/proc/meminfo`: Added `CmaTotal` and `CmaFree` parsing.
+  - `/proc/vmstat`: Added `numa_pte_updates` and `numa_hint_faults` delta calculations.
+  - `/proc/net/netstat`: Added `TCPTimeWaitOverflow`, `PAWSEstab`, and `PAWSPassive` counters.
+  - `/proc/sys/kernel/sem` & `/proc/sysvipc/sem`: Added SysV IPC limits (`SEMMSL`, `SEMMNS`, `SEMOPM`, `SEMMNI`) and active allocation tracking.
+  - `/proc/sys/net/ipv4/tcp_max_tw_buckets`: Added TW bucket ceiling parsing.
+  - `/proc/sys/kernel/numa_balancing`: Added NUMA balancing state parsing.
+  - `/proc/sys/kernel/sched_rt_runtime_us`: Added RT safety runtime limit parsing.
+  - `/proc/[pid]/stat`: Added field 41 (`policy`) parsing to identify `SCHED_FIFO` and `SCHED_RR` tasks.
+
+## [0.8.0] - 2026-08-23
+
+### Added
+- **8 New Diagnostic Rules** (expanding diagnostic catalog from 62 to 70 rules):
+  - **Tier 1 (Base Hard Limits)**:
+    - `BASE_FS_READONLY_REMOUNT` (Critical) — Root or critical filesystem remounted Read-Only (`ro`) by kernel upon I/O or filesystem errors, blocking all writes.
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_UDP_BUFFER_OVERRUN` (High) — Silent packet loss on UDP services (DNS/VoIP/StatsD) from socket buffer overflow (`RcvbufErrors`/`SndbufErrors`).
+    - `CONT_TCP_LISTEN_OVERFLOW_STALL` (High) — Saturated application listen backlog causing `ListenOverflows` and `TCPAbortOnData` connection resets.
+    - `CONT_HUGETLB_POOL_EXHAUSTION` (High) — Explicit HugePages pool 100% exhausted (`HugePages_Free == 0` with reserved pages).
+    - `CONT_PTRACE_TRACER_ATTACH` (High) — Active CPU-heavy process running with attached debugger/tracer (`TracerPid > 0`) intercepting syscalls.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_KCOMPACTD_CPU_SPIN` (Medium) — Proactive memory compaction daemon (`kcompactd*`) spinning at >= 40% CPU failing defragmentation.
+    - `EDGE_MIN_FREE_KBYTES_STALL` (Medium) — Undersized `vm.min_free_kbytes` forcing allocation bursts directly into synchronous direct reclaim stalls.
+    - `EDGE_CORE_PATTERN_PIPE_STALL` (Medium) — Crashing processes stuck in `do_coredump` / `pipe_wait` waiting on a dead or hung core dumper helper.
+- **Rule Research & Backlog Artifact**:
+  - Researched 16 bottleneck patterns and created [`docs/PROPOSED_RULES_BACKLOG.md`](file:///home/ismail/Desktop/go_projects/why-slow/docs/PROPOSED_RULES_BACKLOG.md) documenting remaining rules for future expansions.
+- **Extended Collectors**:
+  - `statfs`: Added `ReadOnly` detection on all inspected mount points.
+  - `/proc/meminfo`: Added `HugePages_Total`, `HugePages_Free`, `HugePages_Rsvd` parsing.
+  - `/proc/net/snmp`: Added `Udp: RcvbufErrors SndbufErrors InErrors` parsing.
+  - `/proc/net/netstat`: Added `TCPAbortOnData` parsing.
+  - `/proc/sys/`: Added `vm.min_free_kbytes` and `kernel.core_pattern` collectors.
+  - `/proc/[pid]/status`: Added `TracerPid` parsing.
+
+## [0.7.0] - 2026-08-23
+
+### Added
+- **15 New Diagnostic Rules** (expanding diagnostic catalog from 47 to 62 rules):
+  - **Tier 2 (Contention & Queues)**:
+    - `CONT_CONTEXT_SWITCH_STORM` (High) — Extreme context switch volume (≥ 100k/s) causing scheduler dispatch thrashing.
+    - `CONT_CPU_GOVERNOR_POWERSAVE_LAG` (High) — CPU frequency clamped to low clock speed by powersave governor under high load.
+    - `CONT_KSOFTIRQD_SATURATION` (High) — Software interrupt daemon (`ksoftirqd/X`) CPU starvation (≥ 40% CPU).
+    - `CONT_WORKINGSET_REFAULT_THRASHING` (High) — Heavy page cache file refaults (≥ 5000) under memory pressure.
+    - `CONT_DIRTY_PAGE_FLUSH_SATURATION` (High) — Saturated dirty/writeback memory buffers forcing `balance_dirty_pages` process sleeps.
+    - `CONT_FSYNC_JOURNAL_STALL` (High) — Processes serialized on filesystem journal transactions (`jbd2_log_wait_commit`, `vfs_fsync`).
+    - `CONT_PAGECACHE_POLLUTION_STREAM` (High) — Bulk sequential I/O process (≥ 50MB/s) evicting active database/app working sets.
+    - `CONT_NET_SOFTNET_BACKLOG_DROPS` (High) — NIC driver backlog queue drops or NAPI budget depletion in `/proc/net/softnet_stat`.
+    - `CONT_TCP_RETRANSMIT_STORM` (High) — Severe TCP packet retransmission rate (≥ 5.0% loss rate) collapsing congestion window.
+    - `CONT_TCP_ZEROWINDOW_STALL` (High) — TCP senders blocked by remote receivers advertising ZeroWindow.
+    - `CONT_COREDUMP_BURST_STORM` (High) — Crashlooping processes driving continuous core dumper CPU/disk churn.
+    - `CONT_UNIX_SOCKET_LOG_BLOCK` (High) — Processes blocked in `sendto()` waiting on saturated Unix domain logging socket buffers.
+  - **Tier 3 (Subtle Edge Cases)**:
+    - `EDGE_THP_SPLIT_STORM` (Medium) — 2MB Huge Pages repeatedly split into 4KB pages under memory allocation stalls.
+    - `EDGE_KHUGEPAGED_CPU_BURN` (Medium) — Background `khugepaged` daemon burning CPU on failed hugepage allocations.
+    - `EDGE_DISK_DEVICE_IOERR_HANG` (High) — Physical disk block device hanging with in-flight commands and 0 completed throughput.
+- **Extended Kernel Collectors**:
+  - `/proc/stat`: Added context switch rate (`ctxt`) and process fork creation count (`processes`) parsing.
+  - `/sys/devices/system/cpu/cpu*/cpufreq`: Added scaling governor detection.
+  - `/proc/vmstat`: Added `workingset_refault_file`, `workingset_refault_anon`, and `thp_split` counters.
+  - `/proc/net/snmp` & `/proc/net/softnet_stat`: Added TCP RetransSegs, OutSegs, and softnet dropped/time-squeeze parser.
+  - `/proc/net/netstat`: Added `TCPWinProbe` and `TCPZeroWindowDrop` metrics.
+- **Test Suite & Verification**:
+  - Unit tests for all 15 new rules with positive and negative trigger cases.
+  - 5 cross-tier disambiguation tests ensuring Tier 1 root causes dominate and secondary issues are accurately demoted.
+  - Verified 100% pass rate with Go race detector (`go test -race ./...`).
+
 ## [0.6.0] - 2026-08-23
 
 ### Added
@@ -20,6 +307,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Culprit Attribution Fix (A1)**: Corrected `RuleCgroupThrottled` to track highest `maxCPUDelta` instead of comparing delta against PID numerical identifier.
 - **Multi-Signal TCP Rule (A2)**: Enforced 2-signal corroboration (`hasPressure && hasAbort`) for `RuleTCPSocketMemoryPressure` at Tier 1 0.95 confidence.
 - **TCP Disambiguation (A3)**: Differentiated `RuleTCPSYNQueueOverflow` from `RuleTCPListenDrops` by requiring active SYN cookie generation.
+- **Test Harness Safety & Host Freeze Elimination**: Fixed an uncontrolled Python `os.fork()` loop in enterprise test scripts that spawned 2^60 processes without exiting; added strict `--pids-limit=50/150`, `--cpus=1.0`, and memory ceilings across all test scenarios.
+- **Go Test Suite Integration**: Cleanly organized collector, analyzer, and presenter unit tests into standard Go package structure with Makefile targets for fast, non-blocking concurrent verification.
 - **Rule Interface Extensibility (A4)**: Added `IsPIDDependent() bool` to the `Rule` interface across all 47 rules, eliminating centralized hardcoded switch in `engine.go`.
 - **Page Size Portability (A6)**: Replaced hardcoded 4096 page size with dynamic `os.Getpagesize()` in `process.go` for multi-architecture compatibility.
 - **PID Discovery Optimization (O1)**: Replaced `os.ReadDir` with `os.Open` + `Readdirnames(-1)` in `discoverPIDs`, eliminating stat syscalls and sorting overhead for ~15-20% speedup.

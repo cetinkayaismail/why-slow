@@ -1,0 +1,3 @@
+sockets: used 250
+TCP: inuse 42 orphan 3 tw 150 alloc 50 mem 2
+UDP: inuse 8 mem 2

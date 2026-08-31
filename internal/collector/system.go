@@ -5,6 +5,7 @@ package collector
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -24,14 +25,35 @@ const (
 	DefaultKSMDir             = "/sys/kernel/mm/ksm"
 	DefaultInterruptsPath     = "/proc/interrupts"
 	DefaultARPPath            = "/proc/net/arp"
-	DefaultGCThresh3Path      = "/proc/sys/net/ipv4/neigh/default/gc_thresh3"
-	DefaultInotifyMaxPath     = "/proc/sys/fs/inotify/max_user_watches"
-	DefaultSchedStatPath      = "/proc/schedstat"
+	DefaultGCThresh3Path          = "/proc/sys/net/ipv4/neigh/default/gc_thresh3"
+	DefaultInotifyMaxPath         = "/proc/sys/fs/inotify/max_user_watches"
+	DefaultInotifyMaxQueuedPath   = "/proc/sys/fs/inotify/max_queued_events"
+	DefaultSchedStatPath          = "/proc/schedstat"
+	DefaultSNMPPath             = "/proc/net/snmp"
+	DefaultSoftnetPath          = "/proc/net/softnet_stat"
+	DefaultMinFreeKbytesPath    = "/proc/sys/vm/min_free_kbytes"
+	DefaultCorePatternPath      = "/proc/sys/kernel/core_pattern"
+	DefaultKernelSemPath        = "/proc/sys/kernel/sem"
+	DefaultSysVIPCSemPath       = "/proc/sysvipc/sem"
+	DefaultTCPMaxTWBucketsPath      = "/proc/sys/net/ipv4/tcp_max_tw_buckets"
+	DefaultNumaBalancingPath        = "/proc/sys/kernel/numa_balancing"
+	DefaultSchedRTRuntimeUSPath     = "/proc/sys/kernel/sched_rt_runtime_us"
+	DefaultSchedMigrationCostNSPath = "/proc/sys/kernel/sched_migration_cost_ns"
+	DefaultAIONRPath                = "/proc/sys/fs/aio-nr"
+	DefaultAIOMaxNRPath             = "/proc/sys/fs/aio-max-nr"
+	DefaultSysVIPCShmPath           = "/proc/sysvipc/shm"
+	DefaultKernelShmMNIPath         = "/proc/sys/kernel/shmmni"
+	DefaultKernelShmAllPath         = "/proc/sys/kernel/shmall"
+	DefaultThreadsMaxPath           = "/proc/sys/kernel/threads-max"
+	DefaultFileNRPath               = "/proc/sys/fs/file-nr"
+	DefaultMDStatPath               = "/proc/mdstat"
+	DefaultTHPDefragPath            = "/sys/kernel/mm/transparent_hugepage/defrag"
+	DefaultSysNetDir                = "/sys/class/net"
 )
 
 // CollectSystemConfig collects kernel configuration parameters, sysctls, and enterprise topologies.
 func CollectSystemConfig() (SystemConfigInfo, error) {
-	return ParseSystemConfig(
+	info, err := ParseSystemConfig(
 		DefaultProcSockStatPath,
 		DefaultPortRangePath,
 		DefaultPIDMaxPath,
@@ -45,6 +67,21 @@ func CollectSystemConfig() (SystemConfigInfo, error) {
 		DefaultInotifyMaxPath,
 		DefaultSchedStatPath,
 	)
+	info.MinFreeKbytes, _ = ParseMinFreeKbytes(DefaultMinFreeKbytesPath)
+	info.CorePattern, _ = ParseCorePattern(DefaultCorePatternPath)
+	info.SysVSem, _ = ParseSysVSem(DefaultKernelSemPath, DefaultSysVIPCSemPath)
+	info.TCPMaxTWBuckets, _ = ParseTCPMaxTWBuckets(DefaultTCPMaxTWBucketsPath)
+	info.NumaBalancing, _ = ParseNumaBalancing(DefaultNumaBalancingPath)
+	info.SchedRTRuntimeUS, _ = ParseSchedRTRuntimeUS(DefaultSchedRTRuntimeUSPath)
+	info.SchedMigrationCostNS, _ = ParseSchedMigrationCostNS(DefaultSchedMigrationCostNSPath)
+	info.Inotify.MaxQueuedEvents, _ = ParseInotifyMaxQueuedEvents(DefaultInotifyMaxQueuedPath)
+	info.AIONR, info.AIOMaxNR, _ = ParseAIO(DefaultAIONRPath, DefaultAIOMaxNRPath)
+	info.SysVShm, _ = ParseSysVShm(DefaultSysVIPCShmPath, DefaultKernelShmMNIPath, DefaultKernelShmAllPath)
+	info.MDStat, _ = ParseMDStat(DefaultMDStatPath)
+	info.THPDefragMode, _ = ParseTHPDefrag(DefaultTHPDefragPath)
+	info.ThreadsMax, _ = ParseThreadsMax(DefaultThreadsMaxPath)
+	info.FileNR, _ = ParseFileNR(DefaultFileNRPath)
+	return info, err
 }
 
 // ParseSystemConfig parses all global system configuration metrics.
@@ -132,6 +169,91 @@ func ParsePIDMax(path string) (uint64, error) {
 	return val, nil
 }
 
+// ParseMinFreeKbytes reads vm.min_free_kbytes from /proc/sys/vm/min_free_kbytes.
+func ParseMinFreeKbytes(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+}
+
+// ParseCorePattern reads kernel.core_pattern from /proc/sys/kernel/core_pattern.
+func ParseCorePattern(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// ParseSysVSem parses SysV semaphore limits from /proc/sys/kernel/sem and allocations from /proc/sysvipc/sem.
+func ParseSysVSem(limitsPath, ipcPath string) (SysVSemInfo, error) {
+	var info SysVSemInfo
+
+	// 1. Read limits from /proc/sys/kernel/sem
+	data, err := os.ReadFile(limitsPath)
+	if err == nil {
+		fields := strings.Fields(string(data))
+		if len(fields) >= 4 {
+			info.SemMSL, _ = strconv.ParseUint(fields[0], 10, 64)
+			info.SemMNS, _ = strconv.ParseUint(fields[1], 10, 64)
+			info.SemOPM, _ = strconv.ParseUint(fields[2], 10, 64)
+			info.SemMNI, _ = strconv.ParseUint(fields[3], 10, 64)
+			info.Available = true
+		}
+	}
+
+	// 2. Read allocations from /proc/sysvipc/sem
+	file, err := os.Open(ipcPath)
+	if err == nil {
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		isHeader := true
+		for scanner.Scan() {
+			if isHeader {
+				isHeader = false
+				continue
+			}
+			fields := strings.Fields(scanner.Text())
+			if len(fields) >= 4 {
+				info.AllocatedSemSets++
+				nsems, _ := strconv.ParseUint(fields[3], 10, 64)
+				info.AllocatedSemaphores += nsems
+			}
+		}
+	}
+
+	return info, nil
+}
+
+// ParseTCPMaxTWBuckets reads tcp_max_tw_buckets from /proc/sys/net/ipv4/tcp_max_tw_buckets.
+func ParseTCPMaxTWBuckets(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+}
+
+// ParseNumaBalancing reads numa_balancing from /proc/sys/kernel/numa_balancing.
+func ParseNumaBalancing(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+}
+
+// ParseSchedRTRuntimeUS reads sched_rt_runtime_us from /proc/sys/kernel/sched_rt_runtime_us.
+func ParseSchedRTRuntimeUS(path string) (int64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+}
+
 // CollectClocksource reads the currently active kernel clocksource.
 func CollectClocksource() (ClocksourceInfo, error) {
 	return ParseClocksource(DefaultClocksourcePath)
@@ -146,9 +268,27 @@ func ParseClocksource(path string) (ClocksourceInfo, error) {
 	return ClocksourceInfo{Current: strings.TrimSpace(string(data))}, nil
 }
 
-// CollectNetStat parses ListenOverflows and ListenDrops from /proc/net/netstat.
+// CollectNetStat parses ListenOverflows, drops, memory pressures, SNMP retransmissions, and softnet backlog drops.
 func CollectNetStat() (NetStatInfo, error) {
-	return ParseNetStat(DefaultNetStatPath)
+	info, _ := ParseNetStat(DefaultNetStatPath)
+	retrans, outSegs, udpRcv, udpSnd, udpIn, _ := ParseSNMP(DefaultSNMPPath)
+	info.RetransSegs = retrans
+	info.OutSegs = outSegs
+	info.UDPRcvbufErrors = udpRcv
+	info.UDPSndbufErrors = udpSnd
+	info.UDPInErrors = udpIn
+
+	ipReqds, ipFails, ipTimeout, ipOKs, _ := ParseIPSNMP(DefaultSNMPPath)
+	info.IPReasmReqds = ipReqds
+	info.IPReasmFails = ipFails
+	info.IPReasmTimeout = ipTimeout
+	info.IPReasmOKs = ipOKs
+
+	dropped, squeeze, _ := ParseSoftnet(DefaultSoftnetPath)
+	info.SoftnetDropped = dropped
+	info.SoftnetTimeSqueeze = squeeze
+
+	return info, nil
 }
 
 // ParseNetStat parses network metrics from a custom netstat path.
@@ -227,8 +367,135 @@ func parseTcpExtFields(headers, values []string, info *NetStatInfo) {
 			info.TCPAbortOnMemory = val
 		case "TCPReqQFullDoCookies":
 			info.TCPReqQFullDoCookies = val
+		case "TCPWinProbe":
+			info.TCPWinProbe = val
+		case "TCPZeroWindowDrop":
+			info.TCPZeroWindowDrop = val
+		case "TCPAbortOnData":
+			info.TCPAbortOnData = val
+		case "TCPAbortOnClose":
+			info.TCPAbortOnClose = val
+		case "TCPTimeouts":
+			info.TCPTimeouts = val
+		case "TCPSpuriousRtxHost":
+			info.TCPSpuriousRtxHost = val
+		case "TCPTimeWaitOverflow":
+			info.TCPTimeWaitOverflow = val
+		case "PAWSEstab":
+			info.PAWSEstab = val
+		case "PAWSPassive":
+			info.PAWSPassive = val
+		case "TCPSlowStartRetrans":
+			info.TCPSlowStartRetrans = val
+		case "SyncookiesSent":
+			info.SyncookiesSent = val
+		case "SyncookiesRecv":
+			info.SyncookiesRecv = val
+		case "SyncookiesFailed":
+			info.SyncookiesFailed = val
+		case "TCPOFOQueue":
+			info.TCPOFOQueue = val
+		case "TCPFastOpenActiveFail":
+			info.TCPFastOpenActiveFail = val
+		case "TCPFastOpenPassiveFail":
+			info.TCPFastOpenPassiveFail = val
+		case "TCPSynRetrans":
+			info.TCPSynRetrans = val
+		case "TCPDeferAcceptDrop":
+			info.TCPDeferAcceptDrop = val
 		}
 	}
+}
+
+// ParseSNMP parses TCP OutSegs, RetransSegs, and UDP buffer errors from /proc/net/snmp.
+func ParseSNMP(path string) (uint64, uint64, uint64, uint64, uint64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, 0, 0, 0, 0, fmt.Errorf("collector: open snmp: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var pendingHeaderPrefix string
+	var headerFields []string
+	var retransSegs, outSegs, udpRcv, udpSnd, udpIn uint64
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		prefix := fields[0]
+		if pendingHeaderPrefix == "" {
+			pendingHeaderPrefix = prefix
+			headerFields = fields[1:]
+		} else if pendingHeaderPrefix == prefix {
+			valFields := fields[1:]
+			count := len(headerFields)
+			if len(valFields) < count {
+				count = len(valFields)
+			}
+			if prefix == "Tcp:" {
+				for i := 0; i < count; i++ {
+					if headerFields[i] == "RetransSegs" {
+						retransSegs, _ = strconv.ParseUint(valFields[i], 10, 64)
+					} else if headerFields[i] == "OutSegs" {
+						outSegs, _ = strconv.ParseUint(valFields[i], 10, 64)
+					}
+				}
+			} else if prefix == "Udp:" {
+				for i := 0; i < count; i++ {
+					switch headerFields[i] {
+					case "RcvbufErrors":
+						udpRcv, _ = strconv.ParseUint(valFields[i], 10, 64)
+					case "SndbufErrors":
+						udpSnd, _ = strconv.ParseUint(valFields[i], 10, 64)
+					case "InErrors":
+						udpIn, _ = strconv.ParseUint(valFields[i], 10, 64)
+					}
+				}
+			}
+			pendingHeaderPrefix = ""
+			headerFields = nil
+		} else {
+			pendingHeaderPrefix = prefix
+			headerFields = fields[1:]
+		}
+	}
+
+	return retransSegs, outSegs, udpRcv, udpSnd, udpIn, scanner.Err()
+}
+
+// ParseSoftnet parses dropped packets and time squeeze counts from /proc/net/softnet_stat.
+func ParseSoftnet(path string) (uint64, uint64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, 0, fmt.Errorf("collector: open softnet_stat: %w", err)
+	}
+	defer file.Close()
+
+	var totalDropped, totalTimeSqueeze uint64
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 3 {
+			continue
+		}
+		// Column 2 (0-indexed 1) is dropped, Column 3 (0-indexed 2) is time_squeeze (hex format)
+		dropped, err1 := strconv.ParseUint(fields[1], 16, 64)
+		timeSqueeze, err2 := strconv.ParseUint(fields[2], 16, 64)
+		if err1 == nil {
+			totalDropped += dropped
+		}
+		if err2 == nil {
+			totalTimeSqueeze += timeSqueeze
+		}
+	}
+
+	return totalDropped, totalTimeSqueeze, scanner.Err()
 }
 
 // ParseConntrack parses netfilter connection tracking tables count and max capacity.
@@ -296,13 +563,19 @@ func ParseBuddyInfo(path string) (ZoneBuddyInfo, error) {
 			continue
 		}
 
-		var totalPages uint64
+		var totalPages, order0Pages, highOrderPages uint64
 		for order := 0; order+chunkStart < len(fields); order++ {
 			chunks, err := strconv.ParseUint(fields[order+chunkStart], 10, 64)
 			if err != nil {
 				continue
 			}
-			totalPages += chunks * (1 << uint(order))
+			pgs := chunks * (1 << uint(order))
+			totalPages += pgs
+			if order == 0 {
+				order0Pages += pgs
+			} else if order >= 3 {
+				highOrderPages += pgs
+			}
 		}
 
 		switch zoneName {
@@ -311,6 +584,8 @@ func ParseBuddyInfo(path string) (ZoneBuddyInfo, error) {
 			info.Available = true
 		case "Normal":
 			info.NormalFreePages += totalPages
+			info.NormalOrder0Pages += order0Pages
+			info.NormalHighOrderPages += highOrderPages
 			info.Available = true
 		}
 	}
@@ -462,6 +737,21 @@ func ParseInotifyWatches(maxPath string) (InotifyInfo, error) {
 	}, nil
 }
 
+// ParseInotifyMaxQueuedEvents parses inotify max queued events limit.
+func ParseInotifyMaxQueuedEvents(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+
+	val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("collector: parse inotify max_queued_events: %w", err)
+	}
+
+	return val, nil
+}
+
 // ParseSchedStat parses /proc/schedstat for CPU runqueue wait time vs running time.
 func ParseSchedStat(path string) (SchedStatInfo, error) {
 	file, err := os.Open(path)
@@ -506,3 +796,282 @@ func ParseSchedStat(path string) (SchedStatInfo, error) {
 		Ratio:              ratio,
 	}, nil
 }
+
+// ParseSchedMigrationCostNS parses kernel.sched_migration_cost_ns from /proc/sys/kernel/sched_migration_cost_ns.
+func ParseSchedMigrationCostNS(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return val, nil
+}
+
+// CollectNetIfaces collects network interface carrier status and statistics from /sys/class/net.
+func CollectNetIfaces() ([]NetIfaceStat, error) {
+	return ParseNetIfaces(DefaultSysNetDir)
+}
+
+// ParseNetIfaces parses network interfaces in the specified sysfs net directory.
+func ParseNetIfaces(sysNetDir string) ([]NetIfaceStat, error) {
+	entries, err := os.ReadDir(sysNetDir)
+	if err != nil {
+		return nil, err
+	}
+
+	ifaces := make([]NetIfaceStat, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "lo" {
+			continue
+		}
+
+		ifaceDir := sysNetDir + "/" + name
+		stat := NetIfaceStat{Name: name}
+
+		// Read carrier_changes
+		if data, err := os.ReadFile(ifaceDir + "/carrier_changes"); err == nil {
+			stat.CarrierChanges, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		}
+
+		// Read operstate
+		if data, err := os.ReadFile(ifaceDir + "/operstate"); err == nil {
+			stat.OperState = strings.TrimSpace(string(data))
+		}
+
+		// Read rx_crc_errors
+		if data, err := os.ReadFile(ifaceDir + "/statistics/rx_crc_errors"); err == nil {
+			stat.RxCRCErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		}
+
+		// Read tx_carrier_errors
+		if data, err := os.ReadFile(ifaceDir + "/statistics/tx_carrier_errors"); err == nil {
+			stat.TxCarrierErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		}
+
+		// Read rx_errors
+		if data, err := os.ReadFile(ifaceDir + "/statistics/rx_errors"); err == nil {
+			stat.RxErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		}
+
+		// Read tx_errors
+		if data, err := os.ReadFile(ifaceDir + "/statistics/tx_errors"); err == nil {
+			stat.TxErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		}
+
+		// Read rx_missed_errors
+		if data, err := os.ReadFile(ifaceDir + "/statistics/rx_missed_errors"); err == nil {
+			stat.RxMissedErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		}
+
+		// Read rx_fifo_errors
+		if data, err := os.ReadFile(ifaceDir + "/statistics/rx_fifo_errors"); err == nil {
+			stat.RxFIFOErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		}
+
+		ifaces = append(ifaces, stat)
+	}
+
+	return ifaces, nil
+}
+
+// ParseTHPDefrag parses the transparent hugepage defrag setting from sysfs.
+func ParseTHPDefrag(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	content := strings.TrimSpace(string(data))
+	// Look for bracketed option, e.g. "always defer defer+madvise [madvise] never"
+	start := strings.IndexByte(content, '[')
+	end := strings.IndexByte(content, ']')
+	if start != -1 && end != -1 && end > start {
+		return content[start+1 : end], nil
+	}
+	return content, nil
+}
+
+// ParseIPSNMP parses IP reassembly counters from /proc/net/snmp.
+func ParseIPSNMP(path string) (uint64, uint64, uint64, uint64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("collector: open snmp: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var pendingHeaderPrefix string
+	var headerFields []string
+	var reqds, fails, timeout, oks uint64
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		prefix := fields[0]
+		if pendingHeaderPrefix == "" {
+			pendingHeaderPrefix = prefix
+			headerFields = fields[1:]
+		} else if pendingHeaderPrefix == prefix {
+			valFields := fields[1:]
+			count := len(headerFields)
+			if len(valFields) < count {
+				count = len(valFields)
+			}
+			if prefix == "Ip:" {
+				for i := 0; i < count; i++ {
+					switch headerFields[i] {
+					case "ReasmReqds":
+						reqds, _ = strconv.ParseUint(valFields[i], 10, 64)
+					case "ReasmFails":
+						fails, _ = strconv.ParseUint(valFields[i], 10, 64)
+					case "ReasmTimeout":
+						timeout, _ = strconv.ParseUint(valFields[i], 10, 64)
+					case "ReasmOKs":
+						oks, _ = strconv.ParseUint(valFields[i], 10, 64)
+					}
+				}
+			}
+			pendingHeaderPrefix = ""
+			headerFields = nil
+		} else {
+			pendingHeaderPrefix = prefix
+			headerFields = fields[1:]
+		}
+	}
+	return reqds, fails, timeout, oks, scanner.Err()
+}
+
+// ParseAIO parses current and maximum asynchronous I/O event limits from /proc/sys/fs/aio-nr and /proc/sys/fs/aio-max-nr.
+func ParseAIO(nrPath, maxPath string) (uint64, uint64, error) {
+	var nr, max uint64
+	if data, err := os.ReadFile(nrPath); err == nil {
+		nr, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	if data, err := os.ReadFile(maxPath); err == nil {
+		max, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	return nr, max, nil
+}
+
+// ParseSysVShm parses active SysV shared memory segments and kernel limits.
+func ParseSysVShm(shmPath, mniPath, allPath string) (SysVShmInfo, error) {
+	var info SysVShmInfo
+	if data, err := os.ReadFile(mniPath); err == nil {
+		info.ShmMNI, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	if data, err := os.ReadFile(allPath); err == nil {
+		info.ShmAll, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+
+	file, err := os.Open(shmPath)
+	if err != nil {
+		return info, err
+	}
+	defer file.Close()
+
+	info.Available = true
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "-") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[0] == "key" {
+			continue
+		}
+		info.AllocatedSegments++
+		if sizeBytes, err := strconv.ParseUint(fields[3], 10, 64); err == nil {
+			info.AllocatedPages += (sizeBytes + 4095) / 4096
+		}
+	}
+	return info, scanner.Err()
+}
+
+// ParseMDStat parses /proc/mdstat to detect active RAID resync, rebuild, or check operations.
+func ParseMDStat(path string) (MDStatInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return MDStatInfo{Available: false}, err
+	}
+	defer file.Close()
+
+	info := MDStatInfo{Available: true}
+	scanner := bufio.NewScanner(file)
+	currentMD := ""
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(line, "md") {
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				currentMD = fields[0]
+			}
+		}
+
+		if strings.Contains(trimmed, "resync =") {
+			info.ActiveResync = true
+			info.ArrayName = currentMD
+			info.Operation = "resync"
+		} else if strings.Contains(trimmed, "recovery =") {
+			info.ActiveResync = true
+			info.ArrayName = currentMD
+			info.Operation = "recovery"
+		} else if strings.Contains(trimmed, "check =") {
+			info.ActiveResync = true
+			info.ArrayName = currentMD
+			info.Operation = "check"
+		} else if strings.Contains(trimmed, "repair =") {
+			info.ActiveResync = true
+			info.ArrayName = currentMD
+			info.Operation = "repair"
+		}
+	}
+	return info, scanner.Err()
+}
+
+// ParseThreadsMax reads threads-max from /proc/sys/kernel/threads-max.
+func ParseThreadsMax(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+}
+
+// ParseFileNR parses system-wide allocated and max file handles from /proc/sys/fs/file-nr.
+func ParseFileNR(path string) (FileNRInfo, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return FileNRInfo{Available: false}, err
+	}
+
+	fields := strings.Fields(string(data))
+	if len(fields) < 3 {
+		return FileNRInfo{Available: false}, fmt.Errorf("collector: invalid file-nr format: %s", string(data))
+	}
+
+	alloc, err1 := strconv.ParseUint(fields[0], 10, 64)
+	unused, err2 := strconv.ParseUint(fields[1], 10, 64)
+	maxF, err3 := strconv.ParseUint(fields[2], 10, 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return FileNRInfo{Available: false}, fmt.Errorf("collector: parse file-nr numbers: %w", errors.Join(err1, err2, err3))
+	}
+
+	return FileNRInfo{
+		Available: true,
+		Allocated: alloc,
+		Unused:    unused,
+		Max:       maxF,
+	}, nil
+}
+
+

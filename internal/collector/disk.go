@@ -61,13 +61,15 @@ func ParseDiskStats(path string) (DiskStatsInfo, error) {
 	return info, nil
 }
 
-// isRealBlockDevice filters out loop, ram, virtual partitions, and mapper devices.
+// isRealBlockDevice filters out pseudo, RAM, and CD devices while retaining physical drives, dm mapper, and loop devices.
 func isRealBlockDevice(name string) bool {
 	// Skip pseudo / RAM / CD devices
-	if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") ||
-		strings.HasPrefix(name, "sr") || strings.HasPrefix(name, "dm-") ||
-		strings.HasPrefix(name, "zram") {
+	if strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "sr") || strings.HasPrefix(name, "zram") {
 		return false
+	}
+
+	if strings.HasPrefix(name, "dm-") || strings.HasPrefix(name, "loop") {
+		return true
 	}
 
 	// Match common physical/virtual disk naming conventions:
@@ -190,6 +192,8 @@ func CheckMountsSpace(paths []string) (DiskSpaceInfo, error) {
 			inodesUsedPercent = clampPercent((float64(usedInodes) / float64(inodesTotal)) * 100.0)
 		}
 
+		isReadOnly := (stat.Flags & 1) != 0
+
 		info.Mounts = append(info.Mounts, MountSpaceInfo{
 			Path:              mountPath,
 			Fsid:              fsid,
@@ -200,6 +204,7 @@ func CheckMountsSpace(paths []string) (DiskSpaceInfo, error) {
 			InodesTotal:       inodesTotal,
 			InodesFree:        inodesFree,
 			InodesUsedPercent: inodesUsedPercent,
+			ReadOnly:          isReadOnly,
 		})
 	}
 

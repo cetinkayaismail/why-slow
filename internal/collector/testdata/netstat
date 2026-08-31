@@ -1,0 +1,4 @@
+TcpExt: SyncookiesSent SyncookiesRecv SyncookiesFailed EmbryonicRsts PruneCalled RcvPruned OfoPruned OutOfWindowIcmps LockDroppedIcmps ArpFilter TW TWRecycled TWKilled PAWSPassive PAWSActive PAWSEstab DelayedACKs DelayedACKLocked DelayedACKLost ListenOverflows ListenDrops TCPMemoryPressures TCPRcvCollapsed TCPAbortOnMemory TCPReqQFullDoCookies TCPHPHits
+TcpExt: 0 0 0 0 0 0 0 0 0 0 120 0 0 0 0 0 450 0 0 14 28 50 120 5 10 56000
+IpExt: InNoRoutes InTruncatedPkts InMcastPkts OutMcastPkts InBcastPkts OutBcastPkts InOctets OutOctets InMcastOctets OutMcastOctets InBcastOctets OutBcastOctets InNoECTPkts InECT1Pkts InECT0Pkts InCEPkts ReasmOverlaps
+IpExt: 0 0 100 200 50 100 12345678 87654321 1000 2000 500 1000 1000 0 0 0 0

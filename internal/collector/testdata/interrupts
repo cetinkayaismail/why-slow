@@ -1,0 +1,4 @@
+            CPU0       CPU1       CPU2       CPU3
+   1:          0          0          0     120000  IR-IO-APIC    1-edge      i8042
+   8:          0          0          0          0  IR-IO-APIC    8-edge      rtc0
+   9:       1000       1000       1000       1000  IR-IO-APIC    9-fasteoi   acpi

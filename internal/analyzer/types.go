@@ -57,7 +57,18 @@ type Rule interface {
 	Tier() int
 	IsPIDDependent() bool
 	Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool)
+	// Suppresses returns rule IDs that this rule makes redundant when it fires.
+	// This enables causal chain suppression: when a root cause fires, its
+	// downstream symptoms are removed from contributing factors.
+	Suppresses() []string
 }
+
+// noSuppression is an embeddable base struct that provides a default nil
+// Suppresses() implementation. Embed this in any rule that does not suppress other rules.
+type noSuppression struct{}
+
+// Suppresses implements Rule.Suppresses with a nil return (no suppressions).
+func (noSuppression) Suppresses() []string { return nil }
 
 // ExtractPSISummary extracts top-level pressure percentages from a snapshot.
 func ExtractPSISummary(snap *collector.SystemSnapshot) PSISummary {

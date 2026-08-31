@@ -27,3 +27,8 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# Graphify output and cache
+graphify-out/
+.graphify_version
+

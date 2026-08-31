@@ -41,7 +41,6 @@ func ParseMemInfo(path string) (MemInfo, error) {
 			continue
 		}
 
-		// Fields in /proc/meminfo are formatted as "Key:     123456 kB"
 		valFields := strings.Fields(valStr)
 		if len(valFields) == 0 {
 			continue
@@ -52,38 +51,7 @@ func ParseMemInfo(path string) (MemInfo, error) {
 			continue
 		}
 
-		switch key {
-		case "MemTotal":
-			info.MemTotal = val
-		case "MemFree":
-			info.MemFree = val
-		case "MemAvailable":
-			info.MemAvailable = val
-		case "Buffers":
-			info.Buffers = val
-		case "Cached":
-			info.Cached = val
-		case "SwapTotal":
-			info.SwapTotal = val
-		case "SwapFree":
-			info.SwapFree = val
-		case "Dirty":
-			info.Dirty = val
-		case "Writeback":
-			info.Writeback = val
-		case "AnonPages":
-			info.AnonPages = val
-		case "Mapped":
-			info.Mapped = val
-		case "Shmem":
-			info.Shmem = val
-		case "Slab":
-			info.Slab = val
-		case "SReclaimable":
-			info.SReclaimable = val
-		case "SUnreclaim":
-			info.SUnreclaim = val
-		}
+		populateMemInfoKey(key, val, &info)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -91,6 +59,55 @@ func ParseMemInfo(path string) (MemInfo, error) {
 	}
 
 	return info, nil
+}
+
+func populateMemInfoKey(key string, val uint64, info *MemInfo) {
+	switch key {
+	case "MemTotal":
+		info.MemTotal = val
+	case "MemFree":
+		info.MemFree = val
+	case "MemAvailable":
+		info.MemAvailable = val
+	case "Buffers":
+		info.Buffers = val
+	case "Cached":
+		info.Cached = val
+	case "SwapTotal":
+		info.SwapTotal = val
+	case "SwapFree":
+		info.SwapFree = val
+	case "Dirty":
+		info.Dirty = val
+	case "Writeback":
+		info.Writeback = val
+	case "AnonPages":
+		info.AnonPages = val
+	case "Mapped":
+		info.Mapped = val
+	case "Shmem":
+		info.Shmem = val
+	case "Slab":
+		info.Slab = val
+	case "SReclaimable":
+		info.SReclaimable = val
+	case "SUnreclaim":
+		info.SUnreclaim = val
+	case "HugePages_Total":
+		info.HugePagesTotal = val
+	case "HugePages_Free":
+		info.HugePagesFree = val
+	case "HugePages_Rsvd":
+		info.HugePagesRsvd = val
+	case "CmaTotal":
+		info.CmaTotal = val
+	case "CmaFree":
+		info.CmaFree = val
+	case "Zswap":
+		info.Zswap = val
+	case "Zswapped":
+		info.Zswapped = val
+	}
 }
 
 // CollectVMStat parses memory management event counters from /proc/vmstat.
@@ -121,32 +138,7 @@ func ParseVMStat(path string) (VMStatInfo, error) {
 			continue
 		}
 
-		switch fields[0] {
-		case "pgscan_direct", "pgscan_direct_throttle":
-			info.PgScanDirect += val
-		case "allocstall_direct":
-			info.AllocStallDirect = val
-		case "compact_stall":
-			info.CompactStall = val
-		case "compact_fail":
-			info.CompactFail = val
-		case "pgmajfault":
-			info.PgMajFault = val
-		case "pswpin":
-			info.Pswpin = val
-		case "pswpout":
-			info.Pswpout = val
-		case "numa_miss":
-			info.NumaMiss = val
-		case "numa_foreign":
-			info.NumaForeign = val
-		case "numa_interleave":
-			info.NumaInterleave = val
-		case "thp_collapse_alloc":
-			info.THPCollapseAlloc = val
-		case "thp_collapse_alloc_failed":
-			info.THPCollapseAllocFailed = val
-		}
+		populateVMStatKey(fields[0], val, &info)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -154,4 +146,61 @@ func ParseVMStat(path string) (VMStatInfo, error) {
 	}
 
 	return info, nil
+}
+
+func populateVMStatKey(key string, val uint64, info *VMStatInfo) {
+	switch key {
+	case "pgscan_direct", "pgscan_direct_throttle":
+		info.PgScanDirect += val
+	case "allocstall_direct":
+		info.AllocStallDirect = val
+	case "compact_stall":
+		info.CompactStall = val
+	case "compact_fail":
+		info.CompactFail = val
+	case "pgmajfault":
+		info.PgMajFault = val
+	case "pswpin":
+		info.Pswpin = val
+	case "pswpout":
+		info.Pswpout = val
+	case "numa_miss":
+		info.NumaMiss = val
+	case "numa_foreign":
+		info.NumaForeign = val
+	case "numa_interleave":
+		info.NumaInterleave = val
+	case "thp_collapse_alloc":
+		info.THPCollapseAlloc = val
+	case "thp_collapse_alloc_failed":
+		info.THPCollapseAllocFailed = val
+	case "workingset_refault_file", "workingset_refault":
+		info.WorkingsetRefaultFile += val
+	case "workingset_refault_anon":
+		info.WorkingsetRefaultAnon = val
+	case "thp_split":
+		info.THPSplit = val
+	case "numa_pte_updates":
+		info.NumaPteUpdates = val
+	case "numa_hint_faults":
+		info.NumaHintFaults = val
+	case "zswpin":
+		info.Zswpin = val
+	case "zswpout":
+		info.Zswpout = val
+	case "zswap_reject_reclaim_fail":
+		info.ZswapRejectReclaimFail = val
+	case "thp_fault_fallback":
+		info.THPFaultFallback = val
+	case "thp_fault_alloc":
+		info.THPFaultAlloc = val
+	case "thp_scan_exceed", "thp_split_page_failed":
+		info.THPScanExceed += val
+	case "nr_dirty":
+		info.NRDirty = val
+	case "thp_zero_page_alloc":
+		info.THPZeroPageAlloc = val
+	case "oom_kill":
+		info.OOMKill = val
+	}
 }
