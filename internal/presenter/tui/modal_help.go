@@ -25,6 +25,7 @@ func RenderHelpModal(s *Screen, theme *Theme, width, height int) {
 		"• Space             Freeze / Pause live differential snapshot",
 		"• s                 Save currently frozen snapshot to JSON report",
 		"• 1 / 2 / 3 / 4     Filter processes by CPU / Memory / IO / D-State",
+		"• n / m             Cycle through multiple active issues / root causes",
 		"• x                 Open Pre-Flight Blast Radius Remedy modal",
 		"• c                 Toggle causal suppression tree indicators",
 		"• ?                 Toggle this help reference overlay",

@@ -26,14 +26,15 @@ const (
 
 // UIState encapsulates the real-time state of the interactive console.
 type UIState struct {
-	IsFrozen      bool
-	ActiveModal   ActiveModal
-	TableState    TableState
-	LastReport    *analyzer.DiagnosticReport
-	LastDiff      *collector.SnapshotDiff
-	PrevSnapshot  *collector.SystemSnapshot
-	StatusMessage string
-	Theme         *Theme
+	IsFrozen       bool
+	ActiveModal    ActiveModal
+	TableState     TableState
+	LastReport     *analyzer.DiagnosticReport
+	LastDiff       *collector.SnapshotDiff
+	PrevSnapshot   *collector.SystemSnapshot
+	ActiveIssueIdx int
+	StatusMessage  string
+	Theme          *Theme
 }
 
 // RunTUI launches the full-screen interactive diagnostic dashboard.
@@ -155,6 +156,22 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 		toggleLockPID(state)
 	case "f", "F": // Focus & Lock directly onto Root Cause Culprit PID
 		focusCulpritPID(state)
+	case "n": // Next active issue
+		if state.ActiveModal == ModalNone {
+			allIssues := GetAllActiveIssues(state.LastReport)
+			if len(allIssues) > 1 {
+				state.ActiveIssueIdx = (state.ActiveIssueIdx + 1) % len(allIssues)
+			}
+		} else {
+			state.ActiveModal = ModalNone
+		}
+	case "m": // Previous active issue
+		if state.ActiveModal == ModalNone {
+			allIssues := GetAllActiveIssues(state.LastReport)
+			if len(allIssues) > 1 {
+				state.ActiveIssueIdx = (state.ActiveIssueIdx - 1 + len(allIssues)) % len(allIssues)
+			}
+		}
 	case " ": // Space (Pause / Freeze)
 		state.IsFrozen = !state.IsFrozen
 	case "s": // Save report
@@ -177,7 +194,7 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 		toggleModal(state, ModalDrilldown)
 	case "x":
 		toggleModal(state, ModalBlastRadius)
-	case "\x1b", "n": // Esc or Cancel
+	case "\x1b": // Esc
 		state.ActiveModal = ModalNone
 	case "y":
 		if state.ActiveModal == ModalBlastRadius {
@@ -191,18 +208,37 @@ func updateSelectedPID(state *UIState) {
 	if state.LastDiff == nil || len(state.LastDiff.Processes) == 0 {
 		return
 	}
-	culpritPID := getCulpritPID(state)
-	sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPID)
+	culpritPIDs := getAllCulpritPIDs(state.LastReport)
+	sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPIDs)
 	if state.TableState.CursorIdx < len(sorted) {
 		state.TableState.SelectedPID = sorted[state.TableState.CursorIdx].PID
 	}
 }
 
-func getCulpritPID(state *UIState) int {
-	if state.LastReport != nil && state.LastReport.PrimaryBlocker != nil {
-		return state.LastReport.PrimaryBlocker.CulpritPID
+func getAllCulpritPIDs(report *analyzer.DiagnosticReport) []int {
+	if report == nil {
+		return nil
 	}
-	return 0
+	var pids []int
+	seen := make(map[int]bool)
+
+	addPID := func(pid int) {
+		if pid > 0 && !seen[pid] {
+			seen[pid] = true
+			pids = append(pids, pid)
+		}
+	}
+
+	if report.PrimaryBlocker != nil {
+		addPID(report.PrimaryBlocker.CulpritPID)
+	}
+	for i := range report.ContributingFactors {
+		addPID(report.ContributingFactors[i].CulpritPID)
+	}
+	for i := range report.SecondaryIssues {
+		addPID(report.SecondaryIssues[i].CulpritPID)
+	}
+	return pids
 }
 
 func toggleLockPID(state *UIState) {
@@ -216,18 +252,34 @@ func toggleLockPID(state *UIState) {
 }
 
 func focusCulpritPID(state *UIState) {
-	culpritPID := getCulpritPID(state)
-	if culpritPID <= 0 {
+	culpritPIDs := getAllCulpritPIDs(state.LastReport)
+	if len(culpritPIDs) == 0 {
 		return
 	}
-	if state.TableState.LockedPID == culpritPID {
-		state.TableState.LockedPID = 0 // Toggle unlock if already locked
-		return
+
+	// Cycle through culprits if multiple exist
+	currIdx := -1
+	for idx, pid := range culpritPIDs {
+		if pid == state.TableState.LockedPID {
+			currIdx = idx
+			break
+		}
 	}
-	state.TableState.SelectedPID = culpritPID
-	state.TableState.LockedPID = culpritPID
-	state.TableState.CursorIdx = 0
-	state.TableState.ScrollIdx = 0
+
+	if currIdx == -1 {
+		target := culpritPIDs[0]
+		state.TableState.SelectedPID = target
+		state.TableState.LockedPID = target
+		state.TableState.CursorIdx = 0
+		state.TableState.ScrollIdx = 0
+	} else if currIdx < len(culpritPIDs)-1 {
+		target := culpritPIDs[currIdx+1]
+		state.TableState.SelectedPID = target
+		state.TableState.LockedPID = target
+		state.TableState.CursorIdx = currIdx + 1
+	} else {
+		state.TableState.LockedPID = 0 // unlock when cycled past end
+	}
 }
 
 func cycleModal(state *UIState) {
@@ -286,23 +338,23 @@ func renderFrame(s *Screen, state *UIState, fd int) {
 	RenderHeader(s, state.Theme, state.LastReport, state.LastDiff, w)
 
 	blockerH := 8
-	RenderPrimaryBlocker(s, state.Theme, state.LastReport, 6, w, blockerH)
+	RenderPrimaryBlocker(s, state.Theme, state.LastReport, state.ActiveIssueIdx, 6, w, blockerH)
 
 	tableY := 6 + blockerH
 	tableH := h - tableY - 4
-	culpritPID := getCulpritPID(state)
+	culpritPIDs := getAllCulpritPIDs(state.LastReport)
 	if tableH > 5 && state.LastDiff != nil {
-		RenderProcessTable(s, state.Theme, state.LastDiff.Processes, &state.TableState, culpritPID, tableY, w, tableH)
+		RenderProcessTable(s, state.Theme, state.LastDiff.Processes, &state.TableState, culpritPIDs, tableY, w, tableH)
 	}
 
 	matrixY := h - 3
 	RenderRuleMatrix(s, state.Theme, state.LastReport, matrixY, w)
 
-	renderActiveModal(s, state, culpritPID, w, h)
+	renderActiveModal(s, state, culpritPIDs, w, h)
 	_ = s.Flush(os.Stdout)
 }
 
-func renderActiveModal(s *Screen, state *UIState, culpritPID, w, h int) {
+func renderActiveModal(s *Screen, state *UIState, culpritPIDs []int, w, h int) {
 	switch state.ActiveModal {
 	case ModalHelp:
 		RenderHelpModal(s, state.Theme, w, h)
@@ -310,7 +362,7 @@ func renderActiveModal(s *Screen, state *UIState, culpritPID, w, h int) {
 		RenderCausalTreeModal(s, state.Theme, state.LastReport, w, h)
 	case ModalDrilldown:
 		if state.LastDiff != nil && len(state.LastDiff.Processes) > 0 {
-			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPID)
+			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPIDs)
 			if state.TableState.CursorIdx < len(sorted) {
 				p := sorted[state.TableState.CursorIdx]
 				RenderDrilldownModal(s, state.Theme, &p, w, h)
@@ -318,7 +370,7 @@ func renderActiveModal(s *Screen, state *UIState, culpritPID, w, h int) {
 		}
 	case ModalBlastRadius:
 		if state.LastDiff != nil && len(state.LastDiff.Processes) > 0 {
-			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPID)
+			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPIDs)
 			if state.TableState.CursorIdx < len(sorted) {
 				p := sorted[state.TableState.CursorIdx]
 				impact := AssessBlastRadius(p.PID, p.Comm, state.LastDiff.Processes, state.LastReport.PrimaryBlocker)

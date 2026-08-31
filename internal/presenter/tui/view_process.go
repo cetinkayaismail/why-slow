@@ -28,12 +28,18 @@ type TableState struct {
 }
 
 // RenderProcessTable draws the interactive process list with wait-channel columns.
-func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, state *TableState, culpritPID, startY, width, height int) {
+func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, state *TableState, culpritPIDs []int, startY, width, height int) {
 	title := "ACTIVE PROCESSES & KERNEL WAIT-CHANNELS"
 	if state.LockedPID > 0 {
-		title = fmt.Sprintf("ACTIVE PROCESSES [🔒 LOCKED ON PID: %d — Press 'l' to Unlock]", state.LockedPID)
-	} else if culpritPID > 0 {
-		title = fmt.Sprintf("ACTIVE PROCESSES [⚠ CULPRIT PID: %d PINNED TO TOP]", culpritPID)
+		if len(culpritPIDs) > 1 {
+			title = fmt.Sprintf("ACTIVE PROCESSES [🔒 LOCKED ON PID: %d — Press 'f' for Next Culprit | 'l' to Unlock]", state.LockedPID)
+		} else {
+			title = fmt.Sprintf("ACTIVE PROCESSES [🔒 LOCKED ON PID: %d — Press 'l' or 'f' to Unlock]", state.LockedPID)
+		}
+	} else if len(culpritPIDs) == 1 {
+		title = fmt.Sprintf("ACTIVE PROCESSES [⚠ CULPRIT PID: %d PINNED TO TOP — Press 'f' to Lock]", culpritPIDs[0])
+	} else if len(culpritPIDs) > 1 {
+		title = fmt.Sprintf("ACTIVE PROCESSES [⚠ %d CULPRITS PINNED TO TOP — Press 'f' to Focus/Lock]", len(culpritPIDs))
 	}
 	s.DrawBox(1, startY, width, height, title)
 
@@ -46,7 +52,7 @@ func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, 
 		"PID", "COMM", "STATE", "CPU%", "READ/s", "WRITE/s", "WCHAN", "CGROUP")
 	s.PrintLineAt(startY+1, 2, tableW, theme.Colorize(header, Bold+Underline))
 
-	sorted := sortProcesses(procs, state.SortMode, culpritPID)
+	sorted := sortProcesses(procs, state.SortMode, culpritPIDs)
 	maxVisibleRows := height - 3
 	if maxVisibleRows <= 0 {
 		return
@@ -66,9 +72,18 @@ func RenderProcessTable(s *Screen, theme *Theme, procs []collector.ProcessDiff, 
 		p := sorted[rowIdx]
 		isSelected := rowIdx == state.CursorIdx
 		isLocked := p.PID == state.LockedPID
-		isCulprit := p.PID == culpritPID && culpritPID > 0
+		isCulprit := isPIDInList(p.PID, culpritPIDs)
 		renderProcessRow(s, theme, p, isSelected, isLocked, isCulprit, startY+2+i, tableW)
 	}
+}
+
+func isPIDInList(pid int, list []int) bool {
+	for _, id := range list {
+		if id == pid && id > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func trackPID(state *TableState, sorted []collector.ProcessDiff) {
@@ -89,19 +104,20 @@ func trackPID(state *TableState, sorted []collector.ProcessDiff) {
 	}
 }
 
-func sortProcesses(procs []collector.ProcessDiff, mode ProcessSortMode, culpritPID int) []collector.ProcessDiff {
+func sortProcesses(procs []collector.ProcessDiff, mode ProcessSortMode, culpritPIDs []int) []collector.ProcessDiff {
 	copied := make([]collector.ProcessDiff, len(procs))
 	copy(copied, procs)
 
 	sort.Slice(copied, func(i, j int) bool {
-		// Priority 1: Culprit PID pinned to the very top
-		if culpritPID > 0 {
-			if copied[i].PID == culpritPID && copied[j].PID != culpritPID {
-				return true
-			}
-			if copied[j].PID == culpritPID && copied[i].PID != culpritPID {
-				return false
-			}
+		isCulpritI := isPIDInList(copied[i].PID, culpritPIDs)
+		isCulpritJ := isPIDInList(copied[j].PID, culpritPIDs)
+
+		// Priority 1: Culprit PIDs pinned to the very top
+		if isCulpritI && !isCulpritJ {
+			return true
+		}
+		if isCulpritJ && !isCulpritI {
+			return false
 		}
 
 		// Priority 2: In Auto mode, prioritize D-State processes then compute/IO activity

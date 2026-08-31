@@ -38,25 +38,25 @@ func TestSortProcesses(t *testing.T) {
 	}
 
 	// Sort by CPU
-	byCPU := sortProcesses(procs, SortByCPU, 0)
+	byCPU := sortProcesses(procs, SortByCPU, nil)
 	if byCPU[0].PID != 2 {
 		t.Errorf("expected top CPU PID=2, got %d", byCPU[0].PID)
 	}
 
 	// Sort by Memory
-	byMem := sortProcesses(procs, SortByMemory, 0)
+	byMem := sortProcesses(procs, SortByMemory, nil)
 	if byMem[0].PID != 3 {
 		t.Errorf("expected top Memory PID=3, got %d", byMem[0].PID)
 	}
 
 	// Sort by IO
-	byIO := sortProcesses(procs, SortByIO, 0)
+	byIO := sortProcesses(procs, SortByIO, nil)
 	if byIO[0].PID != 3 {
 		t.Errorf("expected top IO PID=3, got %d", byIO[0].PID)
 	}
 
 	// Priority Culprit Pinning (PID 1 pinned despite lower CPU)
-	byCulprit := sortProcesses(procs, SortByCPU, 1)
+	byCulprit := sortProcesses(procs, SortByCPU, []int{1})
 	if byCulprit[0].PID != 1 {
 		t.Errorf("expected culprit PID 1 pinned to index 0, got PID %d", byCulprit[0].PID)
 	}
@@ -88,7 +88,7 @@ func TestRenderHeaderAndModals(t *testing.T) {
 	}
 
 	RenderHeader(screen, theme, report, nil, 100)
-	RenderPrimaryBlocker(screen, theme, report, 6, 100, 8)
+	RenderPrimaryBlocker(screen, theme, report, 0, 6, 100, 8)
 	RenderRuleMatrix(screen, theme, report, 26, 100)
 
 	var buf bytes.Buffer

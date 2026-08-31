@@ -70,7 +70,6 @@ func (s *Screen) PrintLineAt(row, col, width int, text string) {
 	padded := PadRightVisible(fitted, width)
 	s.MoveTo(row, col)
 	s.buf.WriteString(padded)
-	s.buf.WriteString("\033[K")
 }
 
 // DrawBox renders a framed box with an optional title.

@@ -12,20 +12,25 @@ func RenderDrilldownModal(s *Screen, theme *Theme, p *collector.ProcessDiff, wid
 		return
 	}
 
-	modalW := 68
+	modalW := 74
 	modalH := 16
-	if modalW > width-4 {
-		modalW = width - 4
+	if modalW > width-2 {
+		modalW = width - 2
 	}
-	if modalH > height-4 {
-		modalH = height - 4
+	if modalH > height-2 {
+		modalH = height - 2
 	}
 
 	startX := (width - modalW) / 2
 	startY := (height - modalH) / 2
 
-	title := fmt.Sprintf("PROCESS INSPECTOR: PID %d [%s]", p.PID, p.Comm)
+	title := fmt.Sprintf("PROCESS INSPECTOR — PID: %d [%s]", p.PID, p.Comm)
 	s.DrawBox(startX, startY, modalW, modalH, title)
+
+	contentW := modalW - 4
+	if contentW <= 0 {
+		return
+	}
 
 	rssMB := float64(p.RSSBytes) / (1024 * 1024)
 	readMB := float64(p.ReadBytesDelta) / (1024 * 1024)
@@ -33,30 +38,39 @@ func RenderDrilldownModal(s *Screen, theme *Theme, p *collector.ProcessDiff, wid
 
 	wchan := p.Wchan
 	if wchan == "" {
-		wchan = "None (Running / Interruptible)"
+		wchan = "None (Running)"
 	}
+	if len(wchan) > 20 {
+		wchan = wchan[:20]
+	}
+
 	cgroup := p.CgroupPath
-	if cgroup == "" {
-		cgroup = "/"
+	if cgroup == "" || cgroup == "/" {
+		cgroup = "root"
+	}
+	if len(cgroup) > 20 {
+		cgroup = cgroup[:20]
 	}
 
-	lines := []string{
-		fmt.Sprintf("• Process Name:   %-20s   • State: %c", p.Comm, p.State),
-		fmt.Sprintf("• Process ID:     %-20d   • Parent PID (PPID): %d", p.PID, p.PPID),
-		fmt.Sprintf("• CPU Utilization:%-19.1f%%   • Active Threads:    %d", p.CPUPercent, p.NumThreads),
-		fmt.Sprintf("• Resident Memory:%-19.1f MB  • OOM Score:         %d", rssMB, p.OOMScore),
-		fmt.Sprintf("• Open File Descr:%-19d   • Max File Descr:    %d", p.OpenFDs, p.MaxFDs),
-		fmt.Sprintf("• Read I/O Delta: %-19.1f MB  • Write I/O Delta:   %.1f MB", readMB, writeMB),
-		fmt.Sprintf("• Kernel Wchan:   %s", wchan),
-		fmt.Sprintf("• Cgroup Path:    %s", cgroup),
-		"",
-		theme.Colorize("Press [Esc] or [Enter] to close this inspector modal.", Bold+FgHiCyan),
-	}
+	// 2-Column Grid Rows
+	r1 := fmt.Sprintf("  %-16s %-16s │ %-16s %s", "Process Name:", p.Comm, "Process State:", string(p.State))
+	r2 := fmt.Sprintf("  %-16s %-16d │ %-16s %d", "Process ID:", p.PID, "Parent PID:", p.PPID)
+	r3 := fmt.Sprintf("  %-16s %-15.1f%% │ %-16s %d threads", "CPU Usage:", p.CPUPercent, "Active Threads:", p.NumThreads)
+	r4 := fmt.Sprintf("  %-16s %-13.1f MB │ %-16s %d", "Resident Memory:", rssMB, "OOM Score:", p.OOMScore)
+	r5 := fmt.Sprintf("  %-16s %-16d │ %-16s %d", "Open FDs:", p.OpenFDs, "Max Soft FDs:", p.MaxFDs)
+	r6 := fmt.Sprintf("  %-16s %-13.1f MB │ %-16s %.1f MB", "Read Delta:", readMB, "Write Delta:", writeMB)
+	r7 := fmt.Sprintf("  %-16s %-16s │ %-16s %s", "Kernel Wchan:", wchan, "Cgroup Scope:", cgroup)
 
-	for i, line := range lines {
-		if startY+2+i >= startY+modalH-1 {
-			break
-		}
-		s.PrintLineAt(startY+2+i, startX+2, modalW-4, line)
-	}
+	s.PrintLineAt(startY+2, startX+2, contentW, theme.Colorize(r1, Bold))
+	s.PrintLineAt(startY+3, startX+2, contentW, r2)
+	s.PrintLineAt(startY+4, startX+2, contentW, r3)
+	s.PrintLineAt(startY+5, startX+2, contentW, r4)
+	s.PrintLineAt(startY+6, startX+2, contentW, r5)
+	s.PrintLineAt(startY+7, startX+2, contentW, r6)
+	s.PrintLineAt(startY+8, startX+2, contentW, r7)
+
+	s.DrawDivider(startX, startY+10, modalW)
+
+	footer := "Actions: [Esc/Enter] Close  •  [l] Pin/Lock PID  •  [x] Blast Radius Remedy"
+	s.PrintLineAt(startY+12, startX+2, contentW, theme.Colorize(footer, Bold+FgHiCyan))
 }

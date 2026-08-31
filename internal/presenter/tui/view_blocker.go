@@ -6,30 +6,58 @@ import (
 	"why-slow/internal/analyzer"
 )
 
-// RenderPrimaryBlocker draws the central explanatory diagnosis card.
-func RenderPrimaryBlocker(s *Screen, theme *Theme, report *analyzer.DiagnosticReport, startY, width, height int) {
+// RenderPrimaryBlocker draws the central explanatory diagnosis card with multi-issue paging support.
+func RenderPrimaryBlocker(s *Screen, theme *Theme, report *analyzer.DiagnosticReport, activeIssueIdx, startY, width, height int) {
 	contentW := width - 6
 	if contentW <= 0 {
 		return
 	}
 
-	if report == nil || report.PrimaryBlocker == nil {
+	allIssues := GetAllActiveIssues(report)
+	if len(allIssues) == 0 {
 		renderHealthyCard(s, theme, startY, width, height, contentW)
 		return
 	}
 
-	diag := report.PrimaryBlocker
+	if activeIssueIdx >= len(allIssues) || activeIssueIdx < 0 {
+		activeIssueIdx = 0
+	}
+	diag := allIssues[activeIssueIdx]
+
 	badge := theme.SeverityBadge(string(diag.Severity))
 	confStr := fmt.Sprintf("(Tier %d | Conf: %.0f%%)", diag.Tier, diag.Confidence*100)
 
+	boxTitle := "PRIMARY BOTTLENECK & ROOT CAUSE"
+	if len(allIssues) > 1 {
+		boxTitle = fmt.Sprintf("ACTIVE ISSUE [%d of %d] — Press 'n' (Next) / 'm' (Prev)", activeIssueIdx+1, len(allIssues))
+	}
+
 	title := fmt.Sprintf("%s %s %s", badge, theme.Colorize(diag.Title, Bold), theme.Colorize(confStr, Dim))
-	s.DrawBox(1, startY, width, height, "PRIMARY BOTTLENECK & ROOT CAUSE")
+	s.DrawBox(1, startY, width, height, boxTitle)
 
 	s.PrintLineAt(startY+1, 3, contentW, title)
 	s.PrintLineAt(startY+2, 3, contentW, fmt.Sprintf("• Explanation: %s", diag.Explanation))
 
 	renderEvidence(s, theme, diag.Evidence, startY+3, contentW)
 	renderCulpritAndFix(s, theme, diag, startY+5, contentW)
+}
+
+// GetAllActiveIssues aggregates primary blocker and contributing/secondary issues.
+func GetAllActiveIssues(report *analyzer.DiagnosticReport) []*analyzer.Diagnosis {
+	if report == nil {
+		return nil
+	}
+	var issues []*analyzer.Diagnosis
+	if report.PrimaryBlocker != nil {
+		issues = append(issues, report.PrimaryBlocker)
+	}
+	for i := range report.ContributingFactors {
+		issues = append(issues, &report.ContributingFactors[i])
+	}
+	for i := range report.SecondaryIssues {
+		issues = append(issues, &report.SecondaryIssues[i])
+	}
+	return issues
 }
 
 func renderHealthyCard(s *Screen, theme *Theme, startY, width, height, contentW int) {
