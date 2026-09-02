@@ -5,10 +5,12 @@
 [![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(stdlib%20only)-success)](https://pkg.go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20x86__64%20%7C%20ARM64-lightgrey)](https://kernel.org)
 [![CGO](https://img.shields.io/badge/CGO-Disabled%20(Pure%20Go)-blue)](https://golang.org)
+[![Security](https://img.shields.io/badge/Security-Zero%20Writes%20%7C%20Read--Only-green)](docs/ARCHITECTURE.md)
+[![Compliance](https://img.shields.io/badge/Compliance-PCI--DSS%20%7C%20SOC%202%20Ready-blueviolet)](docs/ARCHITECTURE.md)
 
-**Instant Linux Performance & Bottleneck Diagnostic Engine**
+**Enterprise-Grade Linux Kernel Diagnostic & Root-Cause Analysis Engine**
 
-`why-slow` answers the age-old question *"Why is my Linux server suddenly slow?"* in **under 1 second**. Instead of juggling `top`, `vmstat`, `iostat`, `dmesg`, `perf`, and `sar`, `why-slow` captures two high-resolution snapshots of the Linux kernel virtual filesystems (`/proc` and `/sys`), computes differentials, and correlates **47 diagnostic rules** through a prioritized multi-tier Intelligence Engine to isolate the exact root cause.
+`why-slow` isolates the true root cause of system slowness and latency spikes in **under 1 second**. Instead of manually correlating `top`, `vmstat`, `iostat`, `dmesg`, `perf`, and `sar`, `why-slow` captures two high-resolution snapshots of Linux kernel virtual interfaces (`/proc` and `/sys`), calculates differentials, and evaluates **160 prioritized diagnostic rules** through a deterministic multi-tier Intelligence Engine.
 
 ---
 
@@ -38,25 +40,34 @@ Contributing & Secondary Findings:
 
 ---
 
-## 🚀 Key Highlights
+## 🏛️ Enterprise & Banking Security Highlights
 
-- **⚡ Instant 1-Second Root Cause Isolation**: Captures a 1-second baseline delta and pinpoints the exact culprit PID and kernel wait channel (`wchan`).
-- **🔒 Zero Dependencies & Zero CGo**: Built strictly with Go Standard Library (`CGO_ENABLED=0`). No external CLI wrappers (`ps`, `lsof`, `iostat`).
-- **🛡️ Opportunistic Elevation**: Works 100% as an unprivileged regular user with graceful degradation. Elevation (`sudo why-slow`) simply widens process visibility.
-- **🚫 Zero Writes & Zero Footprint**: Strictly read-only (`/proc`, `/sys`, `statfs`). Never writes a single byte or temporary file to target systems.
-- **🧠 47 Deep Diagnostic Rules**: Prioritized into **Tier 1** (Hard Limits), **Tier 2** (Contention & Queuing), and **Tier 3** (Kernel Edge Cases).
-- **🤖 Structured JSON Output**: First-class `--json` support for seamless integration into SIEM, APM, Datadog, Prometheus, or CI/CD pipelines.
+- **⚡ Sub-Second Deterministic Analysis**: Wall-clock execution `< 1.05s` with an in-memory compute latency `< 50ms`.
+- **🔒 Zero Dependencies & Zero CGo**: Built 100% with the Go standard library (`CGO_ENABLED=0`). Zero third-party packages in `go.mod`.
+- **🛡️ Opportunistic Elevation**: Works 100% unprivileged. Elevation (`sudo why-slow`) simply widens process visibility without altering code paths.
+- **🚫 Strict Zero-Write Guarantee**: Opens all virtual files with `O_RDONLY`. Zero disk writes, zero temp files in `/tmp` or `/dev/shm`, and zero `ioctl` state mutations.
+- **💼 Banking Compliance Ready**: Meets strict requirements for **PCI-DSS v4.0** (Req 2 & 10), **SOC 2 Type II**, and **CIS Linux Benchmarks** (runs under `hidepid=2`).
+- **🧠 160 Deep Diagnostic Rules**: Prioritized into **Tier 1** (Base Hard Limits), **Tier 2** (Contention & Queuing), and **Tier 3** (Kernel Edge Cases).
+- **🤖 SIEM / SOC Telemetry**: Deterministic Draft 2020-12 JSON Schema output (`--json`) for seamless ingestion into Splunk, Elastic, Datadog, and Vector.
 
 ---
 
 ## 📦 Installation
+
+### Pre-Compiled Pure Go Binary
+Download the self-contained static binary from GitHub Releases (no runtime dependencies):
+```bash
+curl -fsSL https://github.com/cetinkayaismail/why-slow/releases/latest/download/why-slow-linux-amd64 -o why-slow
+chmod +x why-slow
+sudo mv why-slow /usr/local/bin/
+```
 
 ### Go Install (Go 1.22+)
 ```bash
 go install github.com/cetinkayaismail/why-slow/cmd/why-slow@latest
 ```
 
-### Build from Source
+### Build from Source (Bit-for-Bit Reproducible Build)
 ```bash
 git clone https://github.com/cetinkayaismail/why-slow.git
 cd why-slow
@@ -72,10 +83,10 @@ sudo make install
 # Standard interactive diagnostic run (1.00s sampling window)
 why-slow
 
-# Full system-wide visibility across all PIDs and container cgroups
+# Elevated wide-spectrum diagnostic run across all host PIDs and cgroups
 sudo why-slow
 
-# Extended sampling window for capturing periodic or sustained spikes
+# Extended sampling window for capturing intermittent or sustained spikes
 why-slow --interval 3s
 
 # Multi-sample statistical noise reduction (captures 3 samples and takes the median)
@@ -84,13 +95,16 @@ why-slow --samples 3 --interval 1s
 # Continuous 24/7 background sentinel daemon (only alerts on HIGH & CRITICAL issues)
 why-slow --watch --interval 3s --alert-threshold high
 
-# Machine-readable JSON output for automated diagnostics / monitoring
+# Machine-readable JSON output for automated diagnostics / SIEM log forwarders
 why-slow --json
 
-# Compact single-line JSON output for log shippers
+# Compact single-line NDJSON output for log shippers
 why-slow --json --compact
 
-# Disable ANSI terminal colors (or set NO_COLOR=1)
+# Launch interactive raw terminal drilldown UI
+why-slow --tui
+
+# Disable ANSI color coding (or set NO_COLOR=1)
 why-slow --no-color
 ```
 
@@ -99,19 +113,20 @@ why-slow --no-color
 | Flag | Default | Description |
 |---|---|---|
 | `--interval <dur>` | `1s` | Sampling window between Snapshot A and Snapshot B (e.g. `1s`, `2s`, `5s`) |
-| `--samples <n>` | `1` | Number of sampling windows to collect (uses median for noise reduction) |
-| `--watch` | `false` | Run continuously as a background sentinel reporting issues |
+| `--samples <n>` | `1` | Number of sampling windows to collect (evaluates median for noise reduction) |
+| `--watch` | `false` | Run continuously as a background sentinel reporting new bottlenecks |
 | `--alert-threshold <lvl>` | `info` | Minimum severity to report in watch mode (`critical`, `high`, `medium`, `info`) |
 | `--json` | `false` | Output diagnostic report formatted as structured JSON |
-| `--compact` | `false` | Output compact single-line JSON (used with `--json`) |
-| `--no-color` | `false` | Disable ANSI color coding in terminal output |
-| `--version` | `false` | Print `why-slow` version and exit |
+| `--compact` | `false` | Output compact single-line JSON (used in combination with `--json`) |
+| `--tui` | `false` | Launch interactive terminal user interface for interactive inspection |
+| `--no-color` | `false` | Disable ANSI color formatting in terminal output |
+| `--version` | `false` | Print `why-slow` version and build metadata |
 
 ---
 
 ## 🧠 Diagnostic Rules Overview
 
-`why-slow` correlates signals across **159 prioritized kernel diagnostic rules**:
+`why-slow` evaluates telemetry across **160 prioritized diagnostic rules**:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -123,11 +138,11 @@ why-slow --no-color
                                     │ (Causal Suppression & Demotion)
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│  Tier 2: Contention & Queues (P1 Priority — 83 Rules)                  │
+│  Tier 2: Contention & Queues (P1 Priority — 84 Rules)                  │
 │  D-State Pileup • Swap Thrashing • Cgroup Quota Throttled • FD Limit   │
 │  SoftIRQ Storm • TCP Listen Drops • SYN Backlog • blk-mq Starvation    │
 │  vCPU Steal • Conntrack Full • ARP Cache Overflow • Page Table Locks   │
-│  CLOSE_WAIT Socket Leaks • Sustained Load Overload • PSI Stalls        │
+│  CLOSE_WAIT Socket Leaks • Sustained Load Overload • Runaway CPU Hog   │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ (Demotes)
                                     ▼
@@ -139,43 +154,24 @@ why-slow --no-color
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-👉 **View the complete [Diagnostic Rules Catalog](docs/RULES_CATALOG.md) for full descriptions, trigger conditions, and remediations.**
+👉 **View the complete [Diagnostic Rules Catalog](docs/RULES_CATALOG.md) for full trigger conditions and remediations.**
 
 ---
 
-## 🗺️ Future Plans & Autonomous Agent Roadmap
+## 📚 Bank-Grade Enterprise Documentation Hub
 
-We are actively evolving `why-slow` from a standalone CLI diagnostic engine into an **Autonomous Diagnostic Agent** that plugs natively into enterprise observability infrastructure:
-
-### 1. 📡 Autonomous Push Agent (`--push-url`)
-- **Outbound-Only Push Architecture**: Transmits structured JSON diagnostic events over HTTPS with mTLS authentication (`POST https://collector:8443/v1/diagnostics`).
-- **Zero Inbound Port Attack Surface**: No listening TCP ports, eliminating remote attack vectors while operating safely within private VPCs.
-
-### 2. 🔌 Enterprise APM & Monitoring Forwarders
-- **Zabbix Native Integration**: Official `UserParameter` templates and active agent streaming checks.
-- **Prometheus / OpenMetrics Exporter (`--prometheus :9101`)**: Optional read-only scrape endpoint publishing synthesized rule health and PSI metrics.
-- **Log Shipper Sidecars**: Native pipelines for Vector, FluentBit, Fluentd, and Promtail.
-
-### 3. ☸️ Kubernetes-Native DaemonSet & Operator
-- **Cluster-Wide Deployment**: Single-command Helm chart deployment as an unprivileged node `DaemonSet`.
-- **Container Metadata Enrichment**: Automatic mapping of culprit PIDs to Kubernetes Pods, Namespaces, and Containers via downward API and cgroup v2 paths.
-
-### 4. 🚨 Instant Incident Dispatchers
-- Native webhook dispatchers directly routing actionable root-cause cards to **Slack, PagerDuty, OpsGenie, and Microsoft Teams**.
-
----
-
-## 📚 Documentation
-
-- 📖 **[System Architecture](docs/ARCHITECTURE.md)**: Deep dive into the Collector, Intelligence Engine, and Presenter pipeline.
-- 📋 **[Rules Catalog](docs/RULES_CATALOG.md)**: Exhaustive reference for all 159 diagnostic rules across Tier 1, 2, and 3.
-- 🏆 **[Master Benchmark & Stress Report](docs/MASTER_BENCHMARK.md)**: Live Docker stress test results, 5,000 PID performance scaling, and memory benchmarks.
-- 🎯 **[Diagnostic Disambiguation](docs/DIAGNOSTIC_DISAMBIGUATION.md)**: Explanation of multi-signal correlation and root cause isolation.
-- 📜 **[Changelog](docs/CHANGELOG.md)**: Version history, releases, and changelog.
+| Document | Purpose & Scope |
+|---|---|
+| 🏛️ **[System Architecture](docs/ARCHITECTURE.md)** | Technical specification, pipeline design, STRIDE threat model, and zero-write proof. |
+| 📋 **[Rules Catalog](docs/RULES_CATALOG.md)** | Complete reference for all 160 diagnostic rules across Tier 1, 2, and 3. |
+| 📖 **[Operations Runbook](docs/OPERATIONS_RUNBOOK.md)** | Bare-metal, systemd sentinel service, Kubernetes DaemonSet manifest, and incident triage SOP. |
+| 📡 **[SIEM & APM Integration](docs/INTEGRATION_GUIDE.md)** | JSON Schema (Draft 2020-12), Splunk, Elastic SIEM, Datadog, and Vector pipeline configs. |
+| 🎯 **[Diagnostic Disambiguation](docs/DIAGNOSTIC_DISAMBIGUATION.md)** | Root cause isolation theory, causal suppression, and multi-signal disambiguation matrices. |
+| 🏆 **[Master Benchmark & Stress Report](docs/MASTER_BENCHMARK.md)** | Live stress test verification, 5,000 PID density benchmarks, and resource ceiling proofs. |
+| 📜 **[Release Changelog](docs/CHANGELOG.md)** | Version history, releases, and architectural change records. |
 
 ---
 
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
-

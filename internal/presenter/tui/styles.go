@@ -228,4 +228,3 @@ func WrapText(text string, maxWidth int) []string {
 	}
 	return lines
 }
-

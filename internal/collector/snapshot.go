@@ -21,10 +21,10 @@ type RunContext struct {
 
 // PSIMetrics contains Pressure Stall Information metrics for a single level (some or full).
 type PSIMetrics struct {
-	Avg10 float64
-	Avg60 float64
+	Avg10  float64
+	Avg60  float64
 	Avg300 float64
-	Total uint64 // total stall time in microseconds
+	Total  uint64 // total stall time in microseconds
 }
 
 // PSIResource holds 'some' and 'full' pressure stall metrics for a resource.
@@ -209,43 +209,43 @@ type ClocksourceInfo struct {
 
 // NetStatInfo holds TCP drop, overflow, and socket memory pressure metrics from /proc/net/netstat, /proc/net/snmp, and /proc/net/softnet_stat.
 type NetStatInfo struct {
-	ListenOverflows      uint64
-	ListenDrops          uint64
-	TCPMemoryPressures   uint64
-	TCPRcvCollapsed      uint64
-	TCPAbortOnMemory     uint64
-	TCPReqQFullDoCookies uint64
-	TCPWinProbe          uint64
-	TCPZeroWindowDrop    uint64
-	RetransSegs          uint64
-	OutSegs              uint64
-	SoftnetDropped       uint64
-	SoftnetTimeSqueeze   uint64
-	UDPRcvbufErrors      uint64
-	UDPSndbufErrors      uint64
-	UDPInErrors          uint64
-	TCPAbortOnData       uint64
-	TCPTimeWaitOverflow  uint64
-	PAWSEstab            uint64
-	PAWSPassive          uint64
-	TCPSlowStartRetrans  uint64
-	SyncookiesSent       uint64
-	SyncookiesRecv       uint64
-	SyncookiesFailed     uint64
-	TCPOFOQueue          uint64
-	TCPOFODrop           uint64
-	TCPOFOMerge          uint64
-	IPReasmReqds         uint64
-	IPReasmFails         uint64
-	IPReasmTimeout       uint64
-	IPReasmOKs           uint64
-	TCPAbortOnClose      uint64
-	TCPTimeouts             uint64
-	TCPSpuriousRtxHost      uint64
-	TCPFastOpenActiveFail   uint64
-	TCPFastOpenPassiveFail  uint64
-	TCPSynRetrans           uint64
-	TCPDeferAcceptDrop      uint64
+	ListenOverflows        uint64
+	ListenDrops            uint64
+	TCPMemoryPressures     uint64
+	TCPRcvCollapsed        uint64
+	TCPAbortOnMemory       uint64
+	TCPReqQFullDoCookies   uint64
+	TCPWinProbe            uint64
+	TCPZeroWindowDrop      uint64
+	RetransSegs            uint64
+	OutSegs                uint64
+	SoftnetDropped         uint64
+	SoftnetTimeSqueeze     uint64
+	UDPRcvbufErrors        uint64
+	UDPSndbufErrors        uint64
+	UDPInErrors            uint64
+	TCPAbortOnData         uint64
+	TCPTimeWaitOverflow    uint64
+	PAWSEstab              uint64
+	PAWSPassive            uint64
+	TCPSlowStartRetrans    uint64
+	SyncookiesSent         uint64
+	SyncookiesRecv         uint64
+	SyncookiesFailed       uint64
+	TCPOFOQueue            uint64
+	TCPOFODrop             uint64
+	TCPOFOMerge            uint64
+	IPReasmReqds           uint64
+	IPReasmFails           uint64
+	IPReasmTimeout         uint64
+	IPReasmOKs             uint64
+	TCPAbortOnClose        uint64
+	TCPTimeouts            uint64
+	TCPSpuriousRtxHost     uint64
+	TCPFastOpenActiveFail  uint64
+	TCPFastOpenPassiveFail uint64
+	TCPSynRetrans          uint64
+	TCPDeferAcceptDrop     uint64
 }
 
 // SysVShmInfo holds SysV IPC shared memory limits and segment allocation counts from /proc/sys/kernel/shm* and /proc/sysvipc/shm.
@@ -355,18 +355,18 @@ type SchedStatInfo struct {
 
 // SystemConfigInfo holds global kernel configuration limits, enterprise sysctls, and socket counts.
 type SystemConfigInfo struct {
-	PIDMax           uint64
-	PortRange        PortRangeInfo
-	SockStat         SockStatInfo
-	Conntrack        ConntrackInfo
-	BuddyInfo        ZoneBuddyInfo
-	KSM              KSMInfo
-	IRQStat          IRQStatInfo
-	Virt             VirtInfo
-	Neighbor         ARPNeighborInfo
-	Inotify          InotifyInfo
-	SchedStat        SchedStatInfo
-	MinFreeKbytes    uint64
+	PIDMax               uint64
+	PortRange            PortRangeInfo
+	SockStat             SockStatInfo
+	Conntrack            ConntrackInfo
+	BuddyInfo            ZoneBuddyInfo
+	KSM                  KSMInfo
+	IRQStat              IRQStatInfo
+	Virt                 VirtInfo
+	Neighbor             ARPNeighborInfo
+	Inotify              InotifyInfo
+	SchedStat            SchedStatInfo
+	MinFreeKbytes        uint64
 	CorePattern          string
 	SysVSem              SysVSemInfo
 	TCPMaxTWBuckets      uint64
@@ -423,7 +423,6 @@ type VMConfigInfo struct {
 	Swappiness       int // 0-200
 }
 
-
 // NetIfaceStat holds link state and error counters for a network interface from /sys/class/net/<iface>.
 type NetIfaceStat struct {
 	Name            string
@@ -439,44 +438,44 @@ type NetIfaceStat struct {
 
 // ProcessInfo holds snapshot metrics for a single PID.
 type ProcessInfo struct {
-	PID         int
-	Comm        string
-	State       byte // 'R', 'S', 'D', 'Z', 'T', etc.
-	PPID        int
-	UTime       uint64
-	STime       uint64
-	NumThreads  int
-	RSSBytes    uint64
-	OOMScore    int
-	Wchan       string
-	ReadBytes   uint64
-	WriteBytes  uint64
-	IOAvailable bool
-	OpenFDs     int
-	MaxFDs      uint64 // Soft limit
-	CgroupPath  string
-	CpusAllowed int
-	TracerPID   int
-	Policy      int
-	SigQQueued             uint64
-	SigQMax                uint64
-	VoluntaryCtxtSwitches   uint64
+	PID                      int
+	Comm                     string
+	State                    byte // 'R', 'S', 'D', 'Z', 'T', etc.
+	PPID                     int
+	UTime                    uint64
+	STime                    uint64
+	NumThreads               int
+	RSSBytes                 uint64
+	OOMScore                 int
+	Wchan                    string
+	ReadBytes                uint64
+	WriteBytes               uint64
+	IOAvailable              bool
+	OpenFDs                  int
+	MaxFDs                   uint64 // Soft limit
+	CgroupPath               string
+	CpusAllowed              int
+	TracerPID                int
+	Policy                   int
+	SigQQueued               uint64
+	SigQMax                  uint64
+	VoluntaryCtxtSwitches    uint64
 	NonvoluntaryCtxtSwitches uint64
-	Partial                bool
+	Partial                  bool
 }
 
 // CgroupEntry holds throttling, memory.events, and resource statistics for a cgroup.
 type CgroupEntry struct {
-	Path               string
-	ThrottledUsec      uint64
-	NrThrottled        uint64
-	OOMKills           uint64
-	MemoryHighEvents   uint64
-	NrBursts           uint64
-	BurstUsec          uint64
-	Frozen             bool
-	CPUShares          uint64
-	MemEventsMax       uint64
+	Path             string
+	ThrottledUsec    uint64
+	NrThrottled      uint64
+	OOMKills         uint64
+	MemoryHighEvents uint64
+	NrBursts         uint64
+	BurstUsec        uint64
+	Frozen           bool
+	CPUShares        uint64
+	MemEventsMax     uint64
 }
 
 // CgroupInfo holds cgroup v2 controller metrics.
@@ -521,29 +520,29 @@ type CPUUtilization struct {
 
 // ProcessDiff represents computed CPU, I/O, and resource deltas for a process.
 type ProcessDiff struct {
-	PID             int
-	Comm            string
-	State           byte
-	PPID            int
-	NumThreads      int
-	RSSBytes        uint64
-	OOMScore        int
-	Wchan           string
-	CPUTimeDelta    uint64 // (utime + stime) delta in jiffies
-	CPUPercent      float64
-	ReadBytesDelta  uint64
-	WriteBytesDelta uint64
-	OpenFDs         int
-	MaxFDs          uint64
-	FDRatio         float64
-	CgroupPath      string
-	CpusAllowed     int
-	TracerPID       int
-	Policy          int
-	SigQQueued                  uint64
-	SigQMax                     uint64
-	SigQRatio                   float64
-	VoluntaryCtxtSwitchesDelta   uint64
+	PID                           int
+	Comm                          string
+	State                         byte
+	PPID                          int
+	NumThreads                    int
+	RSSBytes                      uint64
+	OOMScore                      int
+	Wchan                         string
+	CPUTimeDelta                  uint64 // (utime + stime) delta in jiffies
+	CPUPercent                    float64
+	ReadBytesDelta                uint64
+	WriteBytesDelta               uint64
+	OpenFDs                       int
+	MaxFDs                        uint64
+	FDRatio                       float64
+	CgroupPath                    string
+	CpusAllowed                   int
+	TracerPID                     int
+	Policy                        int
+	SigQQueued                    uint64
+	SigQMax                       uint64
+	SigQRatio                     float64
+	VoluntaryCtxtSwitchesDelta    uint64
 	NonvoluntaryCtxtSwitchesDelta uint64
 }
 
@@ -595,43 +594,43 @@ type VMStatDiff struct {
 
 // NetStatDiff represents delta counters for networking drops and overflows.
 type NetStatDiff struct {
-	ListenOverflowsDelta      uint64
-	ListenDropsDelta          uint64
-	TCPMemoryPressuresDelta   uint64
-	TCPRcvCollapsedDelta      uint64
-	TCPAbortOnMemoryDelta     uint64
-	TCPReqQFullDoCookiesDelta uint64
-	TCPWinProbeDelta          uint64
-	TCPZeroWindowDropDelta    uint64
-	RetransSegsDelta          uint64
-	OutSegsDelta              uint64
-	SoftnetDroppedDelta       uint64
-	SoftnetTimeSqueezeDelta   uint64
-	UDPRcvbufErrorsDelta      uint64
-	UDPSndbufErrorsDelta      uint64
-	UDPInErrorsDelta          uint64
-	TCPAbortOnDataDelta       uint64
-	TCPTimeWaitOverflowDelta  uint64
-	PAWSEstabDelta            uint64
-	PAWSPassiveDelta          uint64
-	TCPSlowStartRetransDelta  uint64
-	SyncookiesSentDelta       uint64
-	SyncookiesRecvDelta       uint64
-	SyncookiesFailedDelta     uint64
-	TCPOFOQueueDelta          uint64
-	TCPOFODropDelta           uint64
-	TCPOFOMergeDelta          uint64
-	IPReasmReqdsDelta         uint64
-	IPReasmFailsDelta         uint64
-	IPReasmTimeoutDelta       uint64
-	IPReasmOKsDelta           uint64
-	TCPAbortOnCloseDelta      uint64
-	TCPTimeoutsDelta          uint64
-	TCPSpuriousRtxHostDelta   uint64
-	TCPFastOpenActiveFailDelta uint64
+	ListenOverflowsDelta        uint64
+	ListenDropsDelta            uint64
+	TCPMemoryPressuresDelta     uint64
+	TCPRcvCollapsedDelta        uint64
+	TCPAbortOnMemoryDelta       uint64
+	TCPReqQFullDoCookiesDelta   uint64
+	TCPWinProbeDelta            uint64
+	TCPZeroWindowDropDelta      uint64
+	RetransSegsDelta            uint64
+	OutSegsDelta                uint64
+	SoftnetDroppedDelta         uint64
+	SoftnetTimeSqueezeDelta     uint64
+	UDPRcvbufErrorsDelta        uint64
+	UDPSndbufErrorsDelta        uint64
+	UDPInErrorsDelta            uint64
+	TCPAbortOnDataDelta         uint64
+	TCPTimeWaitOverflowDelta    uint64
+	PAWSEstabDelta              uint64
+	PAWSPassiveDelta            uint64
+	TCPSlowStartRetransDelta    uint64
+	SyncookiesSentDelta         uint64
+	SyncookiesRecvDelta         uint64
+	SyncookiesFailedDelta       uint64
+	TCPOFOQueueDelta            uint64
+	TCPOFODropDelta             uint64
+	TCPOFOMergeDelta            uint64
+	IPReasmReqdsDelta           uint64
+	IPReasmFailsDelta           uint64
+	IPReasmTimeoutDelta         uint64
+	IPReasmOKsDelta             uint64
+	TCPAbortOnCloseDelta        uint64
+	TCPTimeoutsDelta            uint64
+	TCPSpuriousRtxHostDelta     uint64
+	TCPFastOpenActiveFailDelta  uint64
 	TCPFastOpenPassiveFailDelta uint64
-	TCPSynRetransDelta        uint64
-	TCPDeferAcceptDropDelta   uint64
+	TCPSynRetransDelta          uint64
+	TCPDeferAcceptDropDelta     uint64
 }
 
 // NetIfaceDiff represents rate and counter differentials for a network interface.
@@ -649,34 +648,34 @@ type NetIfaceDiff struct {
 
 // CgroupDiff represents delta counters for cgroup throttling, memory.events, and OOM events.
 type CgroupDiff struct {
-	Path                   string
-	ThrottledUsecDelta     uint64
-	NrThrottledDelta       uint64
-	OOMKillsDelta          uint64
-	MemoryHighEventsDelta  uint64
-	NrBurstsDelta          uint64
-	BurstUsecDelta         uint64
-	MemEventsMaxDelta      uint64
+	Path                  string
+	ThrottledUsecDelta    uint64
+	NrThrottledDelta      uint64
+	OOMKillsDelta         uint64
+	MemoryHighEventsDelta uint64
+	NrBurstsDelta         uint64
+	BurstUsecDelta        uint64
+	MemEventsMaxDelta     uint64
 }
 
 // SnapshotDiff represents computed deltas and aggregated states between Snapshot A and Snapshot B.
 type SnapshotDiff struct {
-	Duration               time.Duration
-	Timestamp              time.Time
-	ClockJumpDetected      bool // True when system clock jumped backward between snapshots
-	TotalCPUUtil           CPUUtilization
-	PerCoreCPUUtil         []CPUUtilization
-	ProcsRunning           uint64
-	ProcsBlocked           uint64
-	ContextSwitchesDelta   uint64
-	ProcessesCreatedDelta  uint64
-	Processes              []ProcessDiff
-	Disks                  []DiskDeviceDiff
-	VMStat                 VMStatDiff
-	NetStat                NetStatDiff
-	Cgroups                []CgroupDiff
-	NetIfaces              []NetIfaceDiff
-	LatestSnapshot         *SystemSnapshot
+	Duration              time.Duration
+	Timestamp             time.Time
+	ClockJumpDetected     bool // True when system clock jumped backward between snapshots
+	TotalCPUUtil          CPUUtilization
+	PerCoreCPUUtil        []CPUUtilization
+	ProcsRunning          uint64
+	ProcsBlocked          uint64
+	ContextSwitchesDelta  uint64
+	ProcessesCreatedDelta uint64
+	Processes             []ProcessDiff
+	Disks                 []DiskDeviceDiff
+	VMStat                VMStatDiff
+	NetStat               NetStatDiff
+	Cgroups               []CgroupDiff
+	NetIfaces             []NetIfaceDiff
+	LatestSnapshot        *SystemSnapshot
 }
 
 // CollectSnapshot captures a complete point-in-time snapshot of the Linux system.
@@ -886,43 +885,43 @@ func calculateVMStatDiff(a, b *VMStatInfo) VMStatDiff {
 
 func calculateNetStatDiff(a, b *NetStatInfo) NetStatDiff {
 	return NetStatDiff{
-		ListenOverflowsDelta:      diffUint64(b.ListenOverflows, a.ListenOverflows),
-		ListenDropsDelta:          diffUint64(b.ListenDrops, a.ListenDrops),
-		TCPMemoryPressuresDelta:   diffUint64(b.TCPMemoryPressures, a.TCPMemoryPressures),
-		TCPRcvCollapsedDelta:      diffUint64(b.TCPRcvCollapsed, a.TCPRcvCollapsed),
-		TCPAbortOnMemoryDelta:     diffUint64(b.TCPAbortOnMemory, a.TCPAbortOnMemory),
-		TCPReqQFullDoCookiesDelta: diffUint64(b.TCPReqQFullDoCookies, a.TCPReqQFullDoCookies),
-		TCPWinProbeDelta:          diffUint64(b.TCPWinProbe, a.TCPWinProbe),
-		TCPZeroWindowDropDelta:    diffUint64(b.TCPZeroWindowDrop, a.TCPZeroWindowDrop),
-		RetransSegsDelta:          diffUint64(b.RetransSegs, a.RetransSegs),
-		OutSegsDelta:              diffUint64(b.OutSegs, a.OutSegs),
-		SoftnetDroppedDelta:       diffUint64(b.SoftnetDropped, a.SoftnetDropped),
-		SoftnetTimeSqueezeDelta:   diffUint64(b.SoftnetTimeSqueeze, a.SoftnetTimeSqueeze),
-		UDPRcvbufErrorsDelta:      diffUint64(b.UDPRcvbufErrors, a.UDPRcvbufErrors),
-		UDPSndbufErrorsDelta:      diffUint64(b.UDPSndbufErrors, a.UDPSndbufErrors),
-		UDPInErrorsDelta:          diffUint64(b.UDPInErrors, a.UDPInErrors),
-		TCPAbortOnDataDelta:       diffUint64(b.TCPAbortOnData, a.TCPAbortOnData),
-		TCPTimeWaitOverflowDelta:  diffUint64(b.TCPTimeWaitOverflow, a.TCPTimeWaitOverflow),
-		PAWSEstabDelta:            diffUint64(b.PAWSEstab, a.PAWSEstab),
-		PAWSPassiveDelta:          diffUint64(b.PAWSPassive, a.PAWSPassive),
-		TCPSlowStartRetransDelta:  diffUint64(b.TCPSlowStartRetrans, a.TCPSlowStartRetrans),
-		SyncookiesSentDelta:       diffUint64(b.SyncookiesSent, a.SyncookiesSent),
-		SyncookiesRecvDelta:       diffUint64(b.SyncookiesRecv, a.SyncookiesRecv),
-		SyncookiesFailedDelta:     diffUint64(b.SyncookiesFailed, a.SyncookiesFailed),
-		TCPOFOQueueDelta:          diffUint64(b.TCPOFOQueue, a.TCPOFOQueue),
-		TCPOFODropDelta:           diffUint64(b.TCPOFODrop, a.TCPOFODrop),
-		TCPOFOMergeDelta:          diffUint64(b.TCPOFOMerge, a.TCPOFOMerge),
-		IPReasmReqdsDelta:         diffUint64(b.IPReasmReqds, a.IPReasmReqds),
-		IPReasmFailsDelta:         diffUint64(b.IPReasmFails, a.IPReasmFails),
-		IPReasmTimeoutDelta:       diffUint64(b.IPReasmTimeout, a.IPReasmTimeout),
-		IPReasmOKsDelta:           diffUint64(b.IPReasmOKs, a.IPReasmOKs),
-		TCPAbortOnCloseDelta:      diffUint64(b.TCPAbortOnClose, a.TCPAbortOnClose),
-		TCPTimeoutsDelta:          diffUint64(b.TCPTimeouts, a.TCPTimeouts),
-		TCPSpuriousRtxHostDelta:   diffUint64(b.TCPSpuriousRtxHost, a.TCPSpuriousRtxHost),
-		TCPFastOpenActiveFailDelta: diffUint64(b.TCPFastOpenActiveFail, a.TCPFastOpenActiveFail),
+		ListenOverflowsDelta:        diffUint64(b.ListenOverflows, a.ListenOverflows),
+		ListenDropsDelta:            diffUint64(b.ListenDrops, a.ListenDrops),
+		TCPMemoryPressuresDelta:     diffUint64(b.TCPMemoryPressures, a.TCPMemoryPressures),
+		TCPRcvCollapsedDelta:        diffUint64(b.TCPRcvCollapsed, a.TCPRcvCollapsed),
+		TCPAbortOnMemoryDelta:       diffUint64(b.TCPAbortOnMemory, a.TCPAbortOnMemory),
+		TCPReqQFullDoCookiesDelta:   diffUint64(b.TCPReqQFullDoCookies, a.TCPReqQFullDoCookies),
+		TCPWinProbeDelta:            diffUint64(b.TCPWinProbe, a.TCPWinProbe),
+		TCPZeroWindowDropDelta:      diffUint64(b.TCPZeroWindowDrop, a.TCPZeroWindowDrop),
+		RetransSegsDelta:            diffUint64(b.RetransSegs, a.RetransSegs),
+		OutSegsDelta:                diffUint64(b.OutSegs, a.OutSegs),
+		SoftnetDroppedDelta:         diffUint64(b.SoftnetDropped, a.SoftnetDropped),
+		SoftnetTimeSqueezeDelta:     diffUint64(b.SoftnetTimeSqueeze, a.SoftnetTimeSqueeze),
+		UDPRcvbufErrorsDelta:        diffUint64(b.UDPRcvbufErrors, a.UDPRcvbufErrors),
+		UDPSndbufErrorsDelta:        diffUint64(b.UDPSndbufErrors, a.UDPSndbufErrors),
+		UDPInErrorsDelta:            diffUint64(b.UDPInErrors, a.UDPInErrors),
+		TCPAbortOnDataDelta:         diffUint64(b.TCPAbortOnData, a.TCPAbortOnData),
+		TCPTimeWaitOverflowDelta:    diffUint64(b.TCPTimeWaitOverflow, a.TCPTimeWaitOverflow),
+		PAWSEstabDelta:              diffUint64(b.PAWSEstab, a.PAWSEstab),
+		PAWSPassiveDelta:            diffUint64(b.PAWSPassive, a.PAWSPassive),
+		TCPSlowStartRetransDelta:    diffUint64(b.TCPSlowStartRetrans, a.TCPSlowStartRetrans),
+		SyncookiesSentDelta:         diffUint64(b.SyncookiesSent, a.SyncookiesSent),
+		SyncookiesRecvDelta:         diffUint64(b.SyncookiesRecv, a.SyncookiesRecv),
+		SyncookiesFailedDelta:       diffUint64(b.SyncookiesFailed, a.SyncookiesFailed),
+		TCPOFOQueueDelta:            diffUint64(b.TCPOFOQueue, a.TCPOFOQueue),
+		TCPOFODropDelta:             diffUint64(b.TCPOFODrop, a.TCPOFODrop),
+		TCPOFOMergeDelta:            diffUint64(b.TCPOFOMerge, a.TCPOFOMerge),
+		IPReasmReqdsDelta:           diffUint64(b.IPReasmReqds, a.IPReasmReqds),
+		IPReasmFailsDelta:           diffUint64(b.IPReasmFails, a.IPReasmFails),
+		IPReasmTimeoutDelta:         diffUint64(b.IPReasmTimeout, a.IPReasmTimeout),
+		IPReasmOKsDelta:             diffUint64(b.IPReasmOKs, a.IPReasmOKs),
+		TCPAbortOnCloseDelta:        diffUint64(b.TCPAbortOnClose, a.TCPAbortOnClose),
+		TCPTimeoutsDelta:            diffUint64(b.TCPTimeouts, a.TCPTimeouts),
+		TCPSpuriousRtxHostDelta:     diffUint64(b.TCPSpuriousRtxHost, a.TCPSpuriousRtxHost),
+		TCPFastOpenActiveFailDelta:  diffUint64(b.TCPFastOpenActiveFail, a.TCPFastOpenActiveFail),
 		TCPFastOpenPassiveFailDelta: diffUint64(b.TCPFastOpenPassiveFail, a.TCPFastOpenPassiveFail),
-		TCPSynRetransDelta:        diffUint64(b.TCPSynRetrans, a.TCPSynRetrans),
-		TCPDeferAcceptDropDelta:   diffUint64(b.TCPDeferAcceptDrop, a.TCPDeferAcceptDrop),
+		TCPSynRetransDelta:          diffUint64(b.TCPSynRetrans, a.TCPSynRetrans),
+		TCPDeferAcceptDropDelta:     diffUint64(b.TCPDeferAcceptDrop, a.TCPDeferAcceptDrop),
 	}
 }
 
@@ -1032,29 +1031,29 @@ func calculateProcessDiff(aProcs, bProcs []ProcessInfo, duration time.Duration) 
 		cpuPercent := (float64(cpuDelta) / durSec)
 
 		result = append(result, ProcessDiff{
-			PID:                          b.PID,
-			Comm:                         b.Comm,
-			State:                        b.State,
-			PPID:                         b.PPID,
-			NumThreads:                   b.NumThreads,
-			RSSBytes:                     b.RSSBytes,
-			OOMScore:                     b.OOMScore,
-			Wchan:                        b.Wchan,
-			CPUTimeDelta:                 cpuDelta,
-			CPUPercent:                   cpuPercent,
-			ReadBytesDelta:               readBytesDelta,
-			WriteBytesDelta:              writeBytesDelta,
-			OpenFDs:                      b.OpenFDs,
-			MaxFDs:                       b.MaxFDs,
-			FDRatio:                      fdRatio,
-			CgroupPath:                   b.CgroupPath,
-			CpusAllowed:                  b.CpusAllowed,
-			TracerPID:                    b.TracerPID,
-			Policy:                       b.Policy,
-			SigQQueued:                   b.SigQQueued,
-			SigQMax:                      b.SigQMax,
-			SigQRatio:                    sigQRatio,
-			VoluntaryCtxtSwitchesDelta:   volCtxDelta,
+			PID:                           b.PID,
+			Comm:                          b.Comm,
+			State:                         b.State,
+			PPID:                          b.PPID,
+			NumThreads:                    b.NumThreads,
+			RSSBytes:                      b.RSSBytes,
+			OOMScore:                      b.OOMScore,
+			Wchan:                         b.Wchan,
+			CPUTimeDelta:                  cpuDelta,
+			CPUPercent:                    cpuPercent,
+			ReadBytesDelta:                readBytesDelta,
+			WriteBytesDelta:               writeBytesDelta,
+			OpenFDs:                       b.OpenFDs,
+			MaxFDs:                        b.MaxFDs,
+			FDRatio:                       fdRatio,
+			CgroupPath:                    b.CgroupPath,
+			CpusAllowed:                   b.CpusAllowed,
+			TracerPID:                     b.TracerPID,
+			Policy:                        b.Policy,
+			SigQQueued:                    b.SigQQueued,
+			SigQMax:                       b.SigQMax,
+			SigQRatio:                     sigQRatio,
+			VoluntaryCtxtSwitchesDelta:    volCtxDelta,
 			NonvoluntaryCtxtSwitchesDelta: nonVolCtxDelta,
 		})
 	}

@@ -69,10 +69,10 @@ func TestRenderHeaderAndModals(t *testing.T) {
 	report := &analyzer.DiagnosticReport{
 		Duration: "1.0s",
 		SystemPressure: analyzer.PSISummary{
-			Available:         true,
-			CPUStallPercent:   15.5,
+			Available:          true,
+			CPUStallPercent:    15.5,
 			MemoryStallPercent: 0.0,
-			IOStallPercent:    45.2,
+			IOStallPercent:     45.2,
 		},
 		PrimaryBlocker: &analyzer.Diagnosis{
 			RuleID:      "BASE_CPU_SATURATION",

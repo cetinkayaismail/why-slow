@@ -110,9 +110,9 @@ func GetTier2Rules() []Rule {
 // RuleDStatePileup detects tasks stuck in uninterruptible sleep waiting on block/NFS I/O.
 type RuleDStatePileup struct{ noSuppression }
 
-func (r *RuleDStatePileup) ID() string             { return "CONT_DSTATE_PILEUP" }
-func (r *RuleDStatePileup) Tier() int              { return 2 }
-func (r *RuleDStatePileup) IsPIDDependent() bool   { return true }
+func (r *RuleDStatePileup) ID() string           { return "CONT_DSTATE_PILEUP" }
+func (r *RuleDStatePileup) Tier() int            { return 2 }
+func (r *RuleDStatePileup) IsPIDDependent() bool { return true }
 
 func (r *RuleDStatePileup) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -172,9 +172,9 @@ func (r *RuleDStatePileup) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 // RuleSwapThrashing detects kernel direct page scanning and allocation stalls.
 type RuleSwapThrashing struct{ noSuppression }
 
-func (r *RuleSwapThrashing) ID() string             { return "CONT_SWAP_THRASHING" }
-func (r *RuleSwapThrashing) Tier() int              { return 2 }
-func (r *RuleSwapThrashing) IsPIDDependent() bool   { return false }
+func (r *RuleSwapThrashing) ID() string           { return "CONT_SWAP_THRASHING" }
+func (r *RuleSwapThrashing) Tier() int            { return 2 }
+func (r *RuleSwapThrashing) IsPIDDependent() bool { return false }
 
 func (r *RuleSwapThrashing) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -223,9 +223,9 @@ func (r *RuleSwapThrashing) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleCgroupThrottled detects CPU quota wall throttling inside containers or systemd slices.
 type RuleCgroupThrottled struct{ noSuppression }
 
-func (r *RuleCgroupThrottled) ID() string             { return "CONT_CGROUP_THROTTLED" }
-func (r *RuleCgroupThrottled) Tier() int              { return 2 }
-func (r *RuleCgroupThrottled) IsPIDDependent() bool   { return true }
+func (r *RuleCgroupThrottled) ID() string           { return "CONT_CGROUP_THROTTLED" }
+func (r *RuleCgroupThrottled) Tier() int            { return 2 }
+func (r *RuleCgroupThrottled) IsPIDDependent() bool { return true }
 
 func (r *RuleCgroupThrottled) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -282,9 +282,9 @@ func (r *RuleCgroupThrottled) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 // RuleFDExhaustion detects processes approaching their file descriptor limits.
 type RuleFDExhaustion struct{ noSuppression }
 
-func (r *RuleFDExhaustion) ID() string             { return "CONT_FD_EXHAUSTION" }
-func (r *RuleFDExhaustion) Tier() int              { return 2 }
-func (r *RuleFDExhaustion) IsPIDDependent() bool   { return true }
+func (r *RuleFDExhaustion) ID() string           { return "CONT_FD_EXHAUSTION" }
+func (r *RuleFDExhaustion) Tier() int            { return 2 }
+func (r *RuleFDExhaustion) IsPIDDependent() bool { return true }
 
 func (r *RuleFDExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -308,12 +308,12 @@ func (r *RuleFDExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 	}
 
 	return &Diagnosis{
-		RuleID:         r.ID(),
-		Tier:           2,
-		Severity:       SeverityHigh,
-		Confidence:     0.95,
-		Title:          fmt.Sprintf("File Descriptor Exhaustion (PID %d [%s])", topExhausted.PID, topExhausted.Comm),
-		Explanation:    fmt.Sprintf("Process '%s' (PID %d) is using %d of %d allowed file descriptors (%.1f%% of limit).", topExhausted.Comm, topExhausted.PID, topExhausted.OpenFDs, topExhausted.MaxFDs, topExhausted.FDRatio*100.0),
+		RuleID:      r.ID(),
+		Tier:        2,
+		Severity:    SeverityHigh,
+		Confidence:  0.95,
+		Title:       fmt.Sprintf("File Descriptor Exhaustion (PID %d [%s])", topExhausted.PID, topExhausted.Comm),
+		Explanation: fmt.Sprintf("Process '%s' (PID %d) is using %d of %d allowed file descriptors (%.1f%% of limit).", topExhausted.Comm, topExhausted.PID, topExhausted.OpenFDs, topExhausted.MaxFDs, topExhausted.FDRatio*100.0),
 		Evidence: []string{
 			fmt.Sprintf("Open File Descriptors: %d", topExhausted.OpenFDs),
 			fmt.Sprintf("Process Soft Limit: %d (%.1f%% utilized)", topExhausted.MaxFDs, topExhausted.FDRatio*100.0),
@@ -328,9 +328,9 @@ func (r *RuleFDExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 // RuleSoftIRQUnbalance detects a single core saturated by network softirqs while other cores are idle.
 type RuleSoftIRQUnbalance struct{ noSuppression }
 
-func (r *RuleSoftIRQUnbalance) ID() string             { return "CONT_SOFTIRQ_UNBALANCE" }
-func (r *RuleSoftIRQUnbalance) Tier() int              { return 2 }
-func (r *RuleSoftIRQUnbalance) IsPIDDependent() bool   { return false }
+func (r *RuleSoftIRQUnbalance) ID() string           { return "CONT_SOFTIRQ_UNBALANCE" }
+func (r *RuleSoftIRQUnbalance) Tier() int            { return 2 }
+func (r *RuleSoftIRQUnbalance) IsPIDDependent() bool { return false }
 
 func (r *RuleSoftIRQUnbalance) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.PerCoreCPUUtil) < 2 {
@@ -376,9 +376,9 @@ func (r *RuleSoftIRQUnbalance) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleTCPListenDrops detects dropped or overflowing TCP incoming connection queues.
 type RuleTCPListenDrops struct{}
 
-func (r *RuleTCPListenDrops) ID() string             { return "CONT_TCP_LISTEN_DROPS" }
-func (r *RuleTCPListenDrops) Tier() int              { return 2 }
-func (r *RuleTCPListenDrops) IsPIDDependent() bool   { return false }
+func (r *RuleTCPListenDrops) ID() string           { return "CONT_TCP_LISTEN_DROPS" }
+func (r *RuleTCPListenDrops) Tier() int            { return 2 }
+func (r *RuleTCPListenDrops) IsPIDDependent() bool { return false }
 func (r *RuleTCPListenDrops) Suppresses() []string {
 	return []string{"CONT_TCP_LISTEN_OVERFLOW_STALL", "CONT_TCP_SYNQ_OVERFLOW"}
 }
@@ -416,9 +416,9 @@ func (r *RuleTCPListenDrops) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis,
 // RulePIDExhaustion detects PID ceiling saturation risking fork/thread creation failures.
 type RulePIDExhaustion struct{ noSuppression }
 
-func (r *RulePIDExhaustion) ID() string             { return "CONT_PID_EXHAUSTION" }
-func (r *RulePIDExhaustion) Tier() int              { return 2 }
-func (r *RulePIDExhaustion) IsPIDDependent() bool   { return true }
+func (r *RulePIDExhaustion) ID() string           { return "CONT_PID_EXHAUSTION" }
+func (r *RulePIDExhaustion) Tier() int            { return 2 }
+func (r *RulePIDExhaustion) IsPIDDependent() bool { return true }
 
 func (r *RulePIDExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -457,9 +457,9 @@ func (r *RulePIDExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleTimeWaitPortExhaustion detects outbound connect failures due to TIME_WAIT ephemeral port flood.
 type RuleTimeWaitPortExhaustion struct{ noSuppression }
 
-func (r *RuleTimeWaitPortExhaustion) ID() string             { return "CONT_TIMEWAIT_PORT_EXHAUSTION" }
-func (r *RuleTimeWaitPortExhaustion) Tier() int              { return 2 }
-func (r *RuleTimeWaitPortExhaustion) IsPIDDependent() bool   { return false }
+func (r *RuleTimeWaitPortExhaustion) ID() string           { return "CONT_TIMEWAIT_PORT_EXHAUSTION" }
+func (r *RuleTimeWaitPortExhaustion) Tier() int            { return 2 }
+func (r *RuleTimeWaitPortExhaustion) IsPIDDependent() bool { return false }
 
 func (r *RuleTimeWaitPortExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -502,9 +502,9 @@ func (r *RuleTimeWaitPortExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleVCPUStealTime detects hypervisor CPU oversubscription and noisy neighbor cycle theft.
 type RuleVCPUStealTime struct{ noSuppression }
 
-func (r *RuleVCPUStealTime) ID() string             { return "CONT_VCPU_STEAL_TIME" }
-func (r *RuleVCPUStealTime) Tier() int              { return 2 }
-func (r *RuleVCPUStealTime) IsPIDDependent() bool   { return false }
+func (r *RuleVCPUStealTime) ID() string           { return "CONT_VCPU_STEAL_TIME" }
+func (r *RuleVCPUStealTime) Tier() int            { return 2 }
+func (r *RuleVCPUStealTime) IsPIDDependent() bool { return false }
 
 func (r *RuleVCPUStealTime) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -548,9 +548,9 @@ func (r *RuleVCPUStealTime) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleBalloonMemoryOvercommit detects hypervisor memory reclamation and balloon driver inflation.
 type RuleBalloonMemoryOvercommit struct{ noSuppression }
 
-func (r *RuleBalloonMemoryOvercommit) ID() string             { return "CONT_BALLOON_OVERCOMMIT" }
-func (r *RuleBalloonMemoryOvercommit) Tier() int              { return 2 }
-func (r *RuleBalloonMemoryOvercommit) IsPIDDependent() bool   { return false }
+func (r *RuleBalloonMemoryOvercommit) ID() string           { return "CONT_BALLOON_OVERCOMMIT" }
+func (r *RuleBalloonMemoryOvercommit) Tier() int            { return 2 }
+func (r *RuleBalloonMemoryOvercommit) IsPIDDependent() bool { return false }
 
 func (r *RuleBalloonMemoryOvercommit) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -594,9 +594,9 @@ func (r *RuleBalloonMemoryOvercommit) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleConntrackExhaustion detects Netfilter connection tracking table saturation.
 type RuleConntrackExhaustion struct{ noSuppression }
 
-func (r *RuleConntrackExhaustion) ID() string             { return "CONT_CONNTRACK_EXHAUSTION" }
-func (r *RuleConntrackExhaustion) Tier() int              { return 2 }
-func (r *RuleConntrackExhaustion) IsPIDDependent() bool   { return false }
+func (r *RuleConntrackExhaustion) ID() string           { return "CONT_CONNTRACK_EXHAUSTION" }
+func (r *RuleConntrackExhaustion) Tier() int            { return 2 }
+func (r *RuleConntrackExhaustion) IsPIDDependent() bool { return false }
 
 func (r *RuleConntrackExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -630,9 +630,9 @@ func (r *RuleConntrackExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleARPNeighborTableOverflow detects ARP / Neighbor cache table saturation in large subnets or Kubernetes nodes.
 type RuleARPNeighborTableOverflow struct{ noSuppression }
 
-func (r *RuleARPNeighborTableOverflow) ID() string             { return "CONT_ARP_NEIGHBOR_OVERFLOW" }
-func (r *RuleARPNeighborTableOverflow) Tier() int              { return 2 }
-func (r *RuleARPNeighborTableOverflow) IsPIDDependent() bool   { return false }
+func (r *RuleARPNeighborTableOverflow) ID() string           { return "CONT_ARP_NEIGHBOR_OVERFLOW" }
+func (r *RuleARPNeighborTableOverflow) Tier() int            { return 2 }
+func (r *RuleARPNeighborTableOverflow) IsPIDDependent() bool { return false }
 
 func (r *RuleARPNeighborTableOverflow) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -666,9 +666,9 @@ func (r *RuleARPNeighborTableOverflow) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleTCPSYNQueueOverflow detects half-open connection SYN backlog queue floods.
 type RuleTCPSYNQueueOverflow struct{ noSuppression }
 
-func (r *RuleTCPSYNQueueOverflow) ID() string             { return "CONT_TCP_SYN_QUEUE_OVERFLOW" }
-func (r *RuleTCPSYNQueueOverflow) Tier() int              { return 2 }
-func (r *RuleTCPSYNQueueOverflow) IsPIDDependent() bool   { return false }
+func (r *RuleTCPSYNQueueOverflow) ID() string           { return "CONT_TCP_SYN_QUEUE_OVERFLOW" }
+func (r *RuleTCPSYNQueueOverflow) Tier() int            { return 2 }
+func (r *RuleTCPSYNQueueOverflow) IsPIDDependent() bool { return false }
 
 func (r *RuleTCPSYNQueueOverflow) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -705,9 +705,9 @@ func (r *RuleTCPSYNQueueOverflow) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleBlockHardwareTagStarvation detects storage controller blk-mq submission tag queue exhaustion.
 type RuleBlockHardwareTagStarvation struct{ noSuppression }
 
-func (r *RuleBlockHardwareTagStarvation) ID() string             { return "CONT_BLK_MQ_TAG_STARVATION" }
-func (r *RuleBlockHardwareTagStarvation) Tier() int              { return 2 }
-func (r *RuleBlockHardwareTagStarvation) IsPIDDependent() bool   { return true }
+func (r *RuleBlockHardwareTagStarvation) ID() string           { return "CONT_BLK_MQ_TAG_STARVATION" }
+func (r *RuleBlockHardwareTagStarvation) Tier() int            { return 2 }
+func (r *RuleBlockHardwareTagStarvation) IsPIDDependent() bool { return true }
 
 func (r *RuleBlockHardwareTagStarvation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.Processes) == 0 {
@@ -748,9 +748,9 @@ func (r *RuleBlockHardwareTagStarvation) Evaluate(diff *collector.SnapshotDiff) 
 // RuleSchedRunqueueStarvation detects high CPU scheduler runqueue dispatch latencies.
 type RuleSchedRunqueueStarvation struct{ noSuppression }
 
-func (r *RuleSchedRunqueueStarvation) ID() string             { return "CONT_SCHED_RUNQUEUE_STARVATION" }
-func (r *RuleSchedRunqueueStarvation) Tier() int              { return 2 }
-func (r *RuleSchedRunqueueStarvation) IsPIDDependent() bool   { return false }
+func (r *RuleSchedRunqueueStarvation) ID() string           { return "CONT_SCHED_RUNQUEUE_STARVATION" }
+func (r *RuleSchedRunqueueStarvation) Tier() int            { return 2 }
+func (r *RuleSchedRunqueueStarvation) IsPIDDependent() bool { return false }
 
 func (r *RuleSchedRunqueueStarvation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -784,9 +784,9 @@ func (r *RuleSchedRunqueueStarvation) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleCgroupMemoryHighThrottle detects proactive page allocation delay injection in cgroup v2.
 type RuleCgroupMemoryHighThrottle struct{ noSuppression }
 
-func (r *RuleCgroupMemoryHighThrottle) ID() string             { return "CONT_CGROUP_MEM_HIGH_THROTTLE" }
-func (r *RuleCgroupMemoryHighThrottle) Tier() int              { return 2 }
-func (r *RuleCgroupMemoryHighThrottle) IsPIDDependent() bool   { return false }
+func (r *RuleCgroupMemoryHighThrottle) ID() string           { return "CONT_CGROUP_MEM_HIGH_THROTTLE" }
+func (r *RuleCgroupMemoryHighThrottle) Tier() int            { return 2 }
+func (r *RuleCgroupMemoryHighThrottle) IsPIDDependent() bool { return false }
 
 func (r *RuleCgroupMemoryHighThrottle) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.Cgroups) == 0 {
@@ -818,9 +818,9 @@ func (r *RuleCgroupMemoryHighThrottle) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleIOSchedulerQueueLatency detects I/O scheduler queueing delays before requests reach storage controllers.
 type RuleIOSchedulerQueueLatency struct{ noSuppression }
 
-func (r *RuleIOSchedulerQueueLatency) ID() string             { return "CONT_IO_QUEUE_LATENCY" }
-func (r *RuleIOSchedulerQueueLatency) Tier() int              { return 2 }
-func (r *RuleIOSchedulerQueueLatency) IsPIDDependent() bool   { return false }
+func (r *RuleIOSchedulerQueueLatency) ID() string           { return "CONT_IO_QUEUE_LATENCY" }
+func (r *RuleIOSchedulerQueueLatency) Tier() int            { return 2 }
+func (r *RuleIOSchedulerQueueLatency) IsPIDDependent() bool { return false }
 
 func (r *RuleIOSchedulerQueueLatency) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.Disks) == 0 {
@@ -853,9 +853,9 @@ func (r *RuleIOSchedulerQueueLatency) Evaluate(diff *collector.SnapshotDiff) (*D
 // RulePageTableLockContention detects mmap_lock / page table lock contention on multi-threaded runtimes.
 type RulePageTableLockContention struct{ noSuppression }
 
-func (r *RulePageTableLockContention) ID() string             { return "CONT_PAGE_TABLE_LOCK" }
-func (r *RulePageTableLockContention) Tier() int              { return 2 }
-func (r *RulePageTableLockContention) IsPIDDependent() bool   { return true }
+func (r *RulePageTableLockContention) ID() string           { return "CONT_PAGE_TABLE_LOCK" }
+func (r *RulePageTableLockContention) Tier() int            { return 2 }
+func (r *RulePageTableLockContention) IsPIDDependent() bool { return true }
 
 func (r *RulePageTableLockContention) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.Processes) == 0 {
@@ -899,9 +899,9 @@ func (r *RulePageTableLockContention) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleOrphanSocketLeak detects accumulation of unassociated orphan TCP sockets.
 type RuleOrphanSocketLeak struct{ noSuppression }
 
-func (r *RuleOrphanSocketLeak) ID() string             { return "CONT_ORPHAN_SOCKET_LEAK" }
-func (r *RuleOrphanSocketLeak) Tier() int              { return 2 }
-func (r *RuleOrphanSocketLeak) IsPIDDependent() bool   { return false }
+func (r *RuleOrphanSocketLeak) ID() string           { return "CONT_ORPHAN_SOCKET_LEAK" }
+func (r *RuleOrphanSocketLeak) Tier() int            { return 2 }
+func (r *RuleOrphanSocketLeak) IsPIDDependent() bool { return false }
 
 func (r *RuleOrphanSocketLeak) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -1033,12 +1033,12 @@ func (r *RuleKsoftirqdSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 
 	if saturatedDaemon != nil && (diff.TotalCPUUtil.SoftIRQPercent >= 20.0 || diff.TotalCPUUtil.BusyPercent >= 50.0) {
 		return &Diagnosis{
-			RuleID:         r.ID(),
-			Tier:           2,
-			Severity:       SeverityHigh,
-			Confidence:     0.89,
-			Title:          "Software Interrupt (ksoftirqd) Daemon Saturation",
-			Explanation:    fmt.Sprintf("Kernel thread '%s' is consuming %.1f%% CPU processing unbatched softirqs (network RX/TX, timers, RCU).", saturatedDaemon.Comm, saturatedDaemon.CPUPercent),
+			RuleID:      r.ID(),
+			Tier:        2,
+			Severity:    SeverityHigh,
+			Confidence:  0.89,
+			Title:       "Software Interrupt (ksoftirqd) Daemon Saturation",
+			Explanation: fmt.Sprintf("Kernel thread '%s' is consuming %.1f%% CPU processing unbatched softirqs (network RX/TX, timers, RCU).", saturatedDaemon.Comm, saturatedDaemon.CPUPercent),
 			Evidence: []string{
 				fmt.Sprintf("PID %d [%s]: %.1f%% CPU utilization", saturatedDaemon.PID, saturatedDaemon.Comm, saturatedDaemon.CPUPercent),
 				fmt.Sprintf("Host SoftIRQ Time: %.1f%%", diff.TotalCPUUtil.SoftIRQPercent),
@@ -1215,12 +1215,12 @@ func (r *RulePageCachePollutionStream) Evaluate(diff *collector.SnapshotDiff) (*
 	if streamProc != nil && (diff.VMStat.WorkingsetRefaultFileDelta >= 1000 || diff.VMStat.PgScanDirectDelta > 0) {
 		ioMB := float64(streamProc.ReadBytesDelta+streamProc.WriteBytesDelta) / (1024 * 1024)
 		return &Diagnosis{
-			RuleID:         r.ID(),
-			Tier:           2,
-			Severity:       SeverityHigh,
-			Confidence:     0.86,
-			Title:          "Sequential I/O Page Cache Eviction Pollution",
-			Explanation:    fmt.Sprintf("Process '%s' is streaming %.1f MB/s through buffered I/O, evicting active database/application working sets.", streamProc.Comm, ioMB),
+			RuleID:      r.ID(),
+			Tier:        2,
+			Severity:    SeverityHigh,
+			Confidence:  0.86,
+			Title:       "Sequential I/O Page Cache Eviction Pollution",
+			Explanation: fmt.Sprintf("Process '%s' is streaming %.1f MB/s through buffered I/O, evicting active database/application working sets.", streamProc.Comm, ioMB),
 			Evidence: []string{
 				fmt.Sprintf("PID %d [%s]: %.1f MB/s I/O throughput", streamProc.PID, streamProc.Comm, ioMB),
 				fmt.Sprintf("Workingset Refaults Caused: %d pages", diff.VMStat.WorkingsetRefaultFileDelta),
@@ -1374,12 +1374,12 @@ func (r *RuleCoredumpBurstStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 
 	if coredumpProc != nil && diff.ProcessesCreatedDelta >= 10 {
 		return &Diagnosis{
-			RuleID:         r.ID(),
-			Tier:           2,
-			Severity:       SeverityHigh,
-			Confidence:     0.91,
-			Title:          "Crashlooping Process Coredump Saturation",
-			Explanation:    fmt.Sprintf("Crash dumper daemon '%s' is consuming system resources capturing core dumps from %d newly forked/crashed processes.", coredumpProc.Comm, diff.ProcessesCreatedDelta),
+			RuleID:      r.ID(),
+			Tier:        2,
+			Severity:    SeverityHigh,
+			Confidence:  0.91,
+			Title:       "Crashlooping Process Coredump Saturation",
+			Explanation: fmt.Sprintf("Crash dumper daemon '%s' is consuming system resources capturing core dumps from %d newly forked/crashed processes.", coredumpProc.Comm, diff.ProcessesCreatedDelta),
 			Evidence: []string{
 				fmt.Sprintf("Core Dumper Daemon: PID %d [%s] (CPU: %.1f%%)", coredumpProc.PID, coredumpProc.Comm, coredumpProc.CPUPercent),
 				fmt.Sprintf("Fork / Crash Events: %d process creation events in sampling window", diff.ProcessesCreatedDelta),
@@ -1553,12 +1553,12 @@ func (r *RulePtraceTracerAttach) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 		p := &diff.Processes[i]
 		if p.TracerPID > 0 && (p.CPUPercent >= 20.0 || p.CPUTimeDelta > 0) {
 			return &Diagnosis{
-				RuleID:         r.ID(),
-				Tier:           2,
-				Severity:       SeverityHigh,
-				Confidence:     0.94,
-				Title:          "Process Degraded by Active Debugger / Tracer (ptrace)",
-				Explanation:    fmt.Sprintf("Process '%s' (PID %d) is being traced by debugger/profiler (Tracer PID %d), introducing severe syscall interception latency.", p.Comm, p.PID, p.TracerPID),
+				RuleID:      r.ID(),
+				Tier:        2,
+				Severity:    SeverityHigh,
+				Confidence:  0.94,
+				Title:       "Process Degraded by Active Debugger / Tracer (ptrace)",
+				Explanation: fmt.Sprintf("Process '%s' (PID %d) is being traced by debugger/profiler (Tracer PID %d), introducing severe syscall interception latency.", p.Comm, p.PID, p.TracerPID),
 				Evidence: []string{
 					fmt.Sprintf("Target PID %d [%s]: %.1f%% CPU utilization", p.PID, p.Comm, p.CPUPercent),
 					fmt.Sprintf("Tracer PID: %d attached via ptrace()", p.TracerPID),
@@ -1668,12 +1668,12 @@ func (r *RuleCgroupIOThrottleStall) Evaluate(diff *collector.SnapshotDiff) (*Dia
 		p := &diff.Processes[i]
 		if p.CgroupPath != "" && p.CgroupPath != "/" && (p.Wchan == "io_schedule" || p.Wchan == "bdi_writeback_workfn" || p.State == 'D') {
 			return &Diagnosis{
-				RuleID:         r.ID(),
-				Tier:           2,
-				Severity:       SeverityHigh,
-				Confidence:     0.91,
-				Title:          "Container Cgroup I/O Max Bandwidth / IOPS Throttle",
-				Explanation:    fmt.Sprintf("Process '%s' (PID %d) in cgroup '%s' is heavily throttled by cgroup io.max bandwidth/IOPS limits under %.1f%% PSI I/O pressure.", p.Comm, p.PID, p.CgroupPath, ioFullPressure),
+				RuleID:      r.ID(),
+				Tier:        2,
+				Severity:    SeverityHigh,
+				Confidence:  0.91,
+				Title:       "Container Cgroup I/O Max Bandwidth / IOPS Throttle",
+				Explanation: fmt.Sprintf("Process '%s' (PID %d) in cgroup '%s' is heavily throttled by cgroup io.max bandwidth/IOPS limits under %.1f%% PSI I/O pressure.", p.Comm, p.PID, p.CgroupPath, ioFullPressure),
 				Evidence: []string{
 					fmt.Sprintf("Cgroup Path: %s", p.CgroupPath),
 					fmt.Sprintf("PSI I/O Pressure (Full): %.2f%%", ioFullPressure),
@@ -3708,15 +3708,3 @@ func (r *RuleRunawayCPUProcess) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 		Remediation:    fmt.Sprintf("Lower CPU scheduling priority: renice -n 19 -p %d, or send graceful stop: kill -TERM %d", topProc.PID, topProc.PID),
 	}, true
 }
-
-
-
-
-
-
-
-
-
-
-
-

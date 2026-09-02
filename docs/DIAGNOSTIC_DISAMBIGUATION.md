@@ -9,7 +9,7 @@ For example:
 - An application freezing on memory allocations might look like "Running out of RAM" when it is actually **Low-Memory DMA32 Zone Depletion**, **Hypervisor Ballooning**, or **THP Compaction Stalls**.
 - A disk write stall might look like "Disk Saturation" when it is actually **Inode Exhaustion**, **SAN I/O Latency**, or **Cgroup Dirty Throttling**.
 
-This report documents the **5 symptom ambiguity clusters across all 30 diagnostic rules** and details how `why-slow` eliminates false positives using multi-signal kernel telemetry.
+This report documents the **5 symptom ambiguity clusters across all 160 diagnostic rules** and details how `why-slow` eliminates false positives using multi-signal kernel telemetry.
 
 ---
 

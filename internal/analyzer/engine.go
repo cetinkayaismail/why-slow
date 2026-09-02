@@ -173,4 +173,3 @@ func buildSuppressionSet(primaryRuleID string, rules []Rule) map[string]bool {
 	}
 	return suppressed
 }
-

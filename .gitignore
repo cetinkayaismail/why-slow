@@ -1,5 +1,12 @@
+# ==============================================================================
+# Enterprise Git Ignore Policy — why-slow
+# Ensures strict zero-leakage of binaries, profiles, logs, OS files, and scratchpads.
+# ==============================================================================
+
 # Binaries and build outputs
 bin/
+dist/
+build/
 /why-slow
 /why-slow-*
 *.exe
@@ -7,28 +14,59 @@ bin/
 *.so
 *.dylib
 
-# Test artifacts and internal test suites
-internal_tests/
-docs/internal/
-.agents/
-scratch/
-implementation_plan.md
-project_base.md
+# Test artifacts, profiles, and coverage outputs
 *.out
 *.test
 coverage.*
+profile.out
 cpu.pprof
 mem.pprof
+*.prof
+*.trace
 
-# IDE and OS metadata
+# Core dumps, logs, and debug traces
+*.log
+core
+core.*
+*.dump
+*.stackdump
+
+# Internal test suites and temporary directories
+internal_tests/
+docs/internal/
+scratch/
+
+# Local agent artifacts, knowledge graphs, and scratch plans
+.agents/
+graphify-out/
+.graphify_version
+implementation_plan.md
+project_base.md
+
+# Python and virtual environment caches (from test harnesses)
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE, editor, and OS metadata
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
 *.swp
 *~
+*.bak
+*.orig
+*.rej
+.directory
+.fuse_hidden*
 
-# Graphify output and cache
-graphify-out/
-.graphify_version
-
+# Compressed archives and temporary files
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.tmp

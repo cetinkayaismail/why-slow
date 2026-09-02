@@ -237,4 +237,3 @@ func TestLiveHostFullSnapshot(t *testing.T) {
 	t.Logf("Host Snapshot Diff: Duration=%v, CPU Busy=%.2f%%, Procs Scanned=%d, Disks=%d",
 		diff.Duration, diff.TotalCPUUtil.BusyPercent, len(diff.Processes), len(diff.Disks))
 }
-

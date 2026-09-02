@@ -2547,18 +2547,3 @@ func TestDisambiguation_TCPCloseWaitLeak_vs_FDExhaustion(t *testing.T) {
 		t.Errorf("expected Tier 2 primary blocker, got tier %d", report.PrimaryBlocker.Tier)
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

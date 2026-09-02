@@ -548,9 +548,3 @@ func TestParseFileNR(t *testing.T) {
 		t.Errorf("unexpected file-nr parsed result: %+v", fnr)
 	}
 }
-
-
-
-
-
-

@@ -12,7 +12,7 @@ func TestEngineCleanSystem(t *testing.T) {
 		Duration:     1 * time.Second,
 		TotalCPUUtil: collector.CPUUtilization{IdlePercent: 85.0},
 		LatestSnapshot: &collector.SystemSnapshot{
-			Memory: collector.MemInfo{MemTotal: 16000000, MemAvailable: 10000000},
+			Memory:      collector.MemInfo{MemTotal: 16000000, MemAvailable: 10000000},
 			Clocksource: collector.ClocksourceInfo{Current: "tsc"},
 		},
 	}

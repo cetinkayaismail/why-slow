@@ -3,6 +3,40 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.21.0] - 2026-09-02
+
+### Added
+- **Bank-Grade Compliance & Security Governance Specification (`docs/ARCHITECTURE.md`)**:
+  - Full institutional mapping to PCI-DSS v4.0 (Requirements 2 & 10), SOC 2 Type II Trust Services Criteria, and CIS Linux Benchmarks.
+  - Formal mathematical Zero-Write Guarantee proof (`O_RDONLY` descriptors, zero temp files).
+  - SLSA Level 3 supply chain security documentation (0 external Go dependencies, `CGO_ENABLED=0`, reproducible builds).
+  - Explicit kernel sensitive path blacklist (`/proc/[pid]/environ`, `/maps`, `/mem`, `/proc/kcore`).
+- **Enterprise Operations & Production SRE Runbook (`docs/OPERATIONS_RUNBOOK.md`)**:
+  - Deployment topologies for Bare-Metal, Virtualized (VMware/KVM), and Air-Gapped banking enclaves.
+  - Production-ready Kubernetes Node DaemonSet YAML manifest with unprivileged `securityContext` and read-only host procfs mounts.
+  - Production systemd sentinel service unit (`why-slow-sentinel.service`) with CIS security hardening directives.
+  - Incident response Standard Operating Procedures (SOP) and Failure Modes and Effects Analysis (FMEA).
+- **Enterprise Telemetry & SIEM Integration Guide (`docs/INTEGRATION_GUIDE.md`)**:
+  - Formal JSON Schema (Draft 2020-12 compliant) for `why-slow --json`.
+  - Ingestion blueprints and field extraction configs for Splunk Enterprise (`inputs.conf`/`props.conf`), Elastic SIEM (Logstash/Elasticsearch mapping), Datadog, Vector, and PagerDuty alert dispatchers.
+
+### Changed
+- **Enterprise README Standard (`README.md`)**:
+  - Upgraded presentation with compliance badges (PCI-DSS & SOC 2 Ready, Zero Writes, CGo Disabled).
+  - Synchronized rule counts to 160 across all three priority tiers (Tier 1: 13, Tier 2: 84, Tier 3: 63).
+  - Embedded live scenario visual showcases (`01_overview_metrics.png` through `05_test_matrix.png`).
+  - Added enterprise documentation index linking all compliance, architecture, runbook, and integration guides.
+- **Enterprise Architecture Specification (`docs/ARCHITECTURE.md`)**:
+  - Added formal STRIDE Threat Model (Spoofing, Tampering, Repudiation, Information Disclosure, DoS, Elevation of Privilege).
+  - Added mathematical proof of the Zero-Write Guarantee and detailed memory/concurrency architecture.
+- **Diagnostic Rules Catalog (`docs/RULES_CATALOG.md`)**:
+  - Fully synchronized to all 160 diagnostic rules implemented in the engine, adding missing Tier 2 rules (`CONT_RUNAWAY_CPU_PROCESS`, `CONT_SUSTAINED_LOAD_SATURATION`, `CONT_TCP_CLOSE_WAIT_LEAK`).
+- **Strict English Purity**:
+  - Removed Turkish characters and labels in `docs/MASTER_BENCHMARK.md` and translated `docs/internal/BATTLE_TEST_PLAN.md` into 100% technical English.
+- **Enterprise Repository Hygiene & Bloat Elimination**:
+  - Removed ~3.5 MB of redundant timestamped screenshots and duplicate HTML files from git tracking.
+  - Hardened `.gitignore` with enterprise exclusions preventing test artifacts, logs, core dumps, or scratchpads from ever being committed.
+
 ## [0.20.1] - 2026-09-02
 
 ### Added

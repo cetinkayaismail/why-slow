@@ -505,5 +505,3 @@ func TestRuleConntrackTableHardDrop(t *testing.T) {
 		t.Errorf("expected BASE_CONNTRACK_TABLE_HARD_DROP, got %s", diag.RuleID)
 	}
 }
-
-

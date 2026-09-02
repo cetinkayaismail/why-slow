@@ -1752,7 +1752,7 @@ func TestRuleHugepageLeakNoReuse(t *testing.T) {
 			Memory: collector.MemInfo{
 				MemTotal:       16 * 1024 * 1024,
 				MemAvailable:   1 * 1024 * 1024, // < 10%
-				HugePagesTotal: 2500,           // 5GB = ~31% of 16GB
+				HugePagesTotal: 2500,            // 5GB = ~31% of 16GB
 				HugePagesRsvd:  2500,
 			},
 		},
@@ -2774,17 +2774,3 @@ func TestRuleRunawayCPUProcess(t *testing.T) {
 		t.Fatalf("expected RuleRunawayCPUProcess not to trigger on 45%% CPU")
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

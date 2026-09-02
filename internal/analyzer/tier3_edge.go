@@ -90,9 +90,9 @@ func GetTier3Rules() []Rule {
 // RuleTHPCompactionStall detects memory defragmentation latency spikes caused by Transparent Huge Pages.
 type RuleTHPCompactionStall struct{ noSuppression }
 
-func (r *RuleTHPCompactionStall) ID() string             { return "EDGE_THP_COMPACTION_STALL" }
-func (r *RuleTHPCompactionStall) Tier() int              { return 3 }
-func (r *RuleTHPCompactionStall) IsPIDDependent() bool   { return false }
+func (r *RuleTHPCompactionStall) ID() string           { return "EDGE_THP_COMPACTION_STALL" }
+func (r *RuleTHPCompactionStall) Tier() int            { return 3 }
+func (r *RuleTHPCompactionStall) IsPIDDependent() bool { return false }
 
 func (r *RuleTHPCompactionStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -134,9 +134,9 @@ func (r *RuleTHPCompactionStall) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RulePTYStdoutLock detects processes blocked because terminal/SSH stdout buffer is unread.
 type RulePTYStdoutLock struct{ noSuppression }
 
-func (r *RulePTYStdoutLock) ID() string             { return "EDGE_PTY_STDOUT_LOCK" }
-func (r *RulePTYStdoutLock) Tier() int              { return 3 }
-func (r *RulePTYStdoutLock) IsPIDDependent() bool   { return true }
+func (r *RulePTYStdoutLock) ID() string           { return "EDGE_PTY_STDOUT_LOCK" }
+func (r *RulePTYStdoutLock) Tier() int            { return 3 }
+func (r *RulePTYStdoutLock) IsPIDDependent() bool { return true }
 
 func (r *RulePTYStdoutLock) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -157,12 +157,12 @@ func (r *RulePTYStdoutLock) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 	}
 
 	return &Diagnosis{
-		RuleID:         r.ID(),
-		Tier:           3,
-		Severity:       SeverityMedium,
-		Confidence:     0.90,
-		Title:          fmt.Sprintf("Terminal / Pipe Output Buffer Lock (PID %d [%s])", lockedProc.PID, lockedProc.Comm),
-		Explanation:    fmt.Sprintf("Process '%s' (PID %d) is stalled waiting for its stdout/pipe buffer to be consumed.", lockedProc.Comm, lockedProc.PID),
+		RuleID:      r.ID(),
+		Tier:        3,
+		Severity:    SeverityMedium,
+		Confidence:  0.90,
+		Title:       fmt.Sprintf("Terminal / Pipe Output Buffer Lock (PID %d [%s])", lockedProc.PID, lockedProc.Comm),
+		Explanation: fmt.Sprintf("Process '%s' (PID %d) is stalled waiting for its stdout/pipe buffer to be consumed.", lockedProc.Comm, lockedProc.PID),
 		Evidence: []string{
 			fmt.Sprintf("Process PID: %d [%s], State: %c", lockedProc.PID, lockedProc.Comm, lockedProc.State),
 			fmt.Sprintf("Kernel Wait Channel: %s (Terminal write backpressure)", lockedProc.Wchan),
@@ -177,9 +177,9 @@ func (r *RulePTYStdoutLock) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleHPETClocksourceDegrade detects fallback from fast vDSO TSC to slow MMIO clock sources.
 type RuleHPETClocksourceDegrade struct{ noSuppression }
 
-func (r *RuleHPETClocksourceDegrade) ID() string             { return "EDGE_HPET_CLOCKSOURCE_DEGRADE" }
-func (r *RuleHPETClocksourceDegrade) Tier() int              { return 3 }
-func (r *RuleHPETClocksourceDegrade) IsPIDDependent() bool   { return false }
+func (r *RuleHPETClocksourceDegrade) ID() string           { return "EDGE_HPET_CLOCKSOURCE_DEGRADE" }
+func (r *RuleHPETClocksourceDegrade) Tier() int            { return 3 }
+func (r *RuleHPETClocksourceDegrade) IsPIDDependent() bool { return false }
 
 func (r *RuleHPETClocksourceDegrade) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -209,9 +209,9 @@ func (r *RuleHPETClocksourceDegrade) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleCgroupDirtyThrottle detects processes throttled in dirty memory balance flushes.
 type RuleCgroupDirtyThrottle struct{ noSuppression }
 
-func (r *RuleCgroupDirtyThrottle) ID() string             { return "EDGE_CGROUP_DIRTY_THROTTLE" }
-func (r *RuleCgroupDirtyThrottle) Tier() int              { return 3 }
-func (r *RuleCgroupDirtyThrottle) IsPIDDependent() bool   { return true }
+func (r *RuleCgroupDirtyThrottle) ID() string           { return "EDGE_CGROUP_DIRTY_THROTTLE" }
+func (r *RuleCgroupDirtyThrottle) Tier() int            { return 3 }
+func (r *RuleCgroupDirtyThrottle) IsPIDDependent() bool { return true }
 
 func (r *RuleCgroupDirtyThrottle) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -232,12 +232,12 @@ func (r *RuleCgroupDirtyThrottle) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 	}
 
 	return &Diagnosis{
-		RuleID:         r.ID(),
-		Tier:           3,
-		Severity:       SeverityMedium,
-		Confidence:     0.88,
-		Title:          fmt.Sprintf("Dirty Page Cache Throttling (PID %d [%s])", dirtyProc.PID, dirtyProc.Comm),
-		Explanation:    fmt.Sprintf("Process '%s' (PID %d) is forced to sleep because dirty unwritten page ratio has exceeded thresholds.", dirtyProc.Comm, dirtyProc.PID),
+		RuleID:      r.ID(),
+		Tier:        3,
+		Severity:    SeverityMedium,
+		Confidence:  0.88,
+		Title:       fmt.Sprintf("Dirty Page Cache Throttling (PID %d [%s])", dirtyProc.PID, dirtyProc.Comm),
+		Explanation: fmt.Sprintf("Process '%s' (PID %d) is forced to sleep because dirty unwritten page ratio has exceeded thresholds.", dirtyProc.Comm, dirtyProc.PID),
 		Evidence: []string{
 			fmt.Sprintf("Process PID %d [%s] blocked in wchan '%s'", dirtyProc.PID, dirtyProc.Comm, dirtyProc.Wchan),
 		},
@@ -251,9 +251,9 @@ func (r *RuleCgroupDirtyThrottle) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleFutexContention detects hundreds of threads blocked competing for the same user-space mutex lock.
 type RuleFutexContention struct{ noSuppression }
 
-func (r *RuleFutexContention) ID() string             { return "EDGE_FUTEX_CONTENTION" }
-func (r *RuleFutexContention) Tier() int              { return 3 }
-func (r *RuleFutexContention) IsPIDDependent() bool   { return true }
+func (r *RuleFutexContention) ID() string           { return "EDGE_FUTEX_CONTENTION" }
+func (r *RuleFutexContention) Tier() int            { return 3 }
+func (r *RuleFutexContention) IsPIDDependent() bool { return true }
 
 func (r *RuleFutexContention) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -275,12 +275,12 @@ func (r *RuleFutexContention) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 	}
 
 	return &Diagnosis{
-		RuleID:         r.ID(),
-		Tier:           3,
-		Severity:       SeverityMedium,
-		Confidence:     0.85,
-		Title:          fmt.Sprintf("Multithreaded Mutex Lock Contention (PID %d [%s])", topContended.PID, topContended.Comm),
-		Explanation:    fmt.Sprintf("Process '%s' (PID %d) has %d threads heavily blocked competing for user-space futex mutex locks.", topContended.Comm, topContended.PID, topContended.NumThreads),
+		RuleID:      r.ID(),
+		Tier:        3,
+		Severity:    SeverityMedium,
+		Confidence:  0.85,
+		Title:       fmt.Sprintf("Multithreaded Mutex Lock Contention (PID %d [%s])", topContended.PID, topContended.Comm),
+		Explanation: fmt.Sprintf("Process '%s' (PID %d) has %d threads heavily blocked competing for user-space futex mutex locks.", topContended.Comm, topContended.PID, topContended.NumThreads),
 		Evidence: []string{
 			fmt.Sprintf("Thread Count: %d threads in process", topContended.NumThreads),
 			fmt.Sprintf("Kernel Wait Channel: %s", topContended.Wchan),
@@ -295,9 +295,9 @@ func (r *RuleFutexContention) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 // RuleNUMARemoteThrashing detects remote cross-socket memory allocation latency.
 type RuleNUMARemoteThrashing struct{ noSuppression }
 
-func (r *RuleNUMARemoteThrashing) ID() string             { return "EDGE_NUMA_REMOTE_THRASHING" }
-func (r *RuleNUMARemoteThrashing) Tier() int              { return 3 }
-func (r *RuleNUMARemoteThrashing) IsPIDDependent() bool   { return false }
+func (r *RuleNUMARemoteThrashing) ID() string           { return "EDGE_NUMA_REMOTE_THRASHING" }
+func (r *RuleNUMARemoteThrashing) Tier() int            { return 3 }
+func (r *RuleNUMARemoteThrashing) IsPIDDependent() bool { return false }
 
 func (r *RuleNUMARemoteThrashing) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -334,9 +334,9 @@ func (r *RuleNUMARemoteThrashing) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleCPUAffinityPin detects single-core affinity bottleneck when aggregate system CPU is largely idle.
 type RuleCPUAffinityPin struct{ noSuppression }
 
-func (r *RuleCPUAffinityPin) ID() string             { return "EDGE_CPU_AFFINITY_PIN" }
-func (r *RuleCPUAffinityPin) Tier() int              { return 3 }
-func (r *RuleCPUAffinityPin) IsPIDDependent() bool   { return true }
+func (r *RuleCPUAffinityPin) ID() string           { return "EDGE_CPU_AFFINITY_PIN" }
+func (r *RuleCPUAffinityPin) Tier() int            { return 3 }
+func (r *RuleCPUAffinityPin) IsPIDDependent() bool { return true }
 
 func (r *RuleCPUAffinityPin) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -367,12 +367,12 @@ func (r *RuleCPUAffinityPin) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis,
 	}
 
 	return &Diagnosis{
-		RuleID:         r.ID(),
-		Tier:           3,
-		Severity:       SeverityMedium,
-		Confidence:     0.90,
-		Title:          fmt.Sprintf("Single-Core CPU Affinity Pin Bottleneck (PID %d [%s])", pinnedProc.PID, pinnedProc.Comm),
-		Explanation:    fmt.Sprintf("Process '%s' (PID %d) is pinned to a single CPU core and saturating it (%.1f%% CPU) while overall system is %.1f%% idle.", pinnedProc.Comm, pinnedProc.PID, pinnedProc.CPUPercent, diff.TotalCPUUtil.IdlePercent),
+		RuleID:      r.ID(),
+		Tier:        3,
+		Severity:    SeverityMedium,
+		Confidence:  0.90,
+		Title:       fmt.Sprintf("Single-Core CPU Affinity Pin Bottleneck (PID %d [%s])", pinnedProc.PID, pinnedProc.Comm),
+		Explanation: fmt.Sprintf("Process '%s' (PID %d) is pinned to a single CPU core and saturating it (%.1f%% CPU) while overall system is %.1f%% idle.", pinnedProc.Comm, pinnedProc.PID, pinnedProc.CPUPercent, diff.TotalCPUUtil.IdlePercent),
 		Evidence: []string{
 			fmt.Sprintf("Process CPU Utilization: %.1f%% (Pinned to 1 CPU core)", pinnedProc.CPUPercent),
 			fmt.Sprintf("Overall System Idle: %.1f%% across %d cores", diff.TotalCPUUtil.IdlePercent, numCores),
@@ -387,9 +387,9 @@ func (r *RuleCPUAffinityPin) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis,
 // RuleZombieDefunctLeak detects zombie / defunct process accumulation from unreaped children.
 type RuleZombieDefunctLeak struct{ noSuppression }
 
-func (r *RuleZombieDefunctLeak) ID() string             { return "EDGE_ZOMBIE_DEFUNCT_LEAK" }
-func (r *RuleZombieDefunctLeak) Tier() int              { return 3 }
-func (r *RuleZombieDefunctLeak) IsPIDDependent() bool   { return true }
+func (r *RuleZombieDefunctLeak) ID() string           { return "EDGE_ZOMBIE_DEFUNCT_LEAK" }
+func (r *RuleZombieDefunctLeak) Tier() int            { return 3 }
+func (r *RuleZombieDefunctLeak) IsPIDDependent() bool { return true }
 
 func (r *RuleZombieDefunctLeak) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -468,9 +468,9 @@ func identifyTopZombieParent(procs []collector.ProcessDiff, parentZombies map[in
 // RuleCgroupOOMKillEvent detects silent container OOM kill events triggered by cgroup memory limits.
 type RuleCgroupOOMKillEvent struct{ noSuppression }
 
-func (r *RuleCgroupOOMKillEvent) ID() string             { return "EDGE_CGROUP_OOM_KILL_EVENT" }
-func (r *RuleCgroupOOMKillEvent) Tier() int              { return 3 }
-func (r *RuleCgroupOOMKillEvent) IsPIDDependent() bool   { return true }
+func (r *RuleCgroupOOMKillEvent) ID() string           { return "EDGE_CGROUP_OOM_KILL_EVENT" }
+func (r *RuleCgroupOOMKillEvent) Tier() int            { return 3 }
+func (r *RuleCgroupOOMKillEvent) IsPIDDependent() bool { return true }
 
 func (r *RuleCgroupOOMKillEvent) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -509,9 +509,9 @@ func (r *RuleCgroupOOMKillEvent) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleDMA32ZoneExhaustion detects low-memory DMA32 zone depletion on multi-gigabyte servers.
 type RuleDMA32ZoneExhaustion struct{ noSuppression }
 
-func (r *RuleDMA32ZoneExhaustion) ID() string             { return "EDGE_ZONE_DMA32_EXHAUSTION" }
-func (r *RuleDMA32ZoneExhaustion) Tier() int              { return 3 }
-func (r *RuleDMA32ZoneExhaustion) IsPIDDependent() bool   { return false }
+func (r *RuleDMA32ZoneExhaustion) ID() string           { return "EDGE_ZONE_DMA32_EXHAUSTION" }
+func (r *RuleDMA32ZoneExhaustion) Tier() int            { return 3 }
+func (r *RuleDMA32ZoneExhaustion) IsPIDDependent() bool { return false }
 
 func (r *RuleDMA32ZoneExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -547,9 +547,9 @@ func (r *RuleDMA32ZoneExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleKSMScanStall detects Kernel Samepage Merging CPU thrashing and cache eviction.
 type RuleKSMScanStall struct{ noSuppression }
 
-func (r *RuleKSMScanStall) ID() string             { return "EDGE_KSM_SCAN_STALL" }
-func (r *RuleKSMScanStall) Tier() int              { return 3 }
-func (r *RuleKSMScanStall) IsPIDDependent() bool   { return true }
+func (r *RuleKSMScanStall) ID() string           { return "EDGE_KSM_SCAN_STALL" }
+func (r *RuleKSMScanStall) Tier() int            { return 3 }
+func (r *RuleKSMScanStall) IsPIDDependent() bool { return true }
 
 func (r *RuleKSMScanStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -601,9 +601,9 @@ func (r *RuleKSMScanStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 // RuleIRQCoreStorm detects severe hardware interrupt imbalance on a single CPU core.
 type RuleIRQCoreStorm struct{ noSuppression }
 
-func (r *RuleIRQCoreStorm) ID() string             { return "EDGE_IRQ_CORE_STORM" }
-func (r *RuleIRQCoreStorm) Tier() int              { return 3 }
-func (r *RuleIRQCoreStorm) IsPIDDependent() bool   { return false }
+func (r *RuleIRQCoreStorm) ID() string           { return "EDGE_IRQ_CORE_STORM" }
+func (r *RuleIRQCoreStorm) Tier() int            { return 3 }
+func (r *RuleIRQCoreStorm) IsPIDDependent() bool { return false }
 
 func (r *RuleIRQCoreStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -639,9 +639,9 @@ func (r *RuleIRQCoreStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 // RuleSlabUnreclaimableLeak detects kernel dentry / inode slab memory consumption leaks.
 type RuleSlabUnreclaimableLeak struct{ noSuppression }
 
-func (r *RuleSlabUnreclaimableLeak) ID() string             { return "EDGE_SLAB_UNRECLAIM_LEAK" }
-func (r *RuleSlabUnreclaimableLeak) Tier() int              { return 3 }
-func (r *RuleSlabUnreclaimableLeak) IsPIDDependent() bool   { return false }
+func (r *RuleSlabUnreclaimableLeak) ID() string           { return "EDGE_SLAB_UNRECLAIM_LEAK" }
+func (r *RuleSlabUnreclaimableLeak) Tier() int            { return 3 }
+func (r *RuleSlabUnreclaimableLeak) IsPIDDependent() bool { return false }
 
 func (r *RuleSlabUnreclaimableLeak) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -676,9 +676,9 @@ func (r *RuleSlabUnreclaimableLeak) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleInotifyWatchExhaustion detects inotify watch table saturation or restrictive user limits.
 type RuleInotifyWatchExhaustion struct{ noSuppression }
 
-func (r *RuleInotifyWatchExhaustion) ID() string             { return "EDGE_INOTIFY_WATCH_EXHAUSTION" }
-func (r *RuleInotifyWatchExhaustion) Tier() int              { return 3 }
-func (r *RuleInotifyWatchExhaustion) IsPIDDependent() bool   { return false }
+func (r *RuleInotifyWatchExhaustion) ID() string           { return "EDGE_INOTIFY_WATCH_EXHAUSTION" }
+func (r *RuleInotifyWatchExhaustion) Tier() int            { return 3 }
+func (r *RuleInotifyWatchExhaustion) IsPIDDependent() bool { return false }
 
 func (r *RuleInotifyWatchExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -714,9 +714,9 @@ func (r *RuleInotifyWatchExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleRCUSchedulerStall detects kernel Read-Copy-Update (RCU) grace period contention.
 type RuleRCUSchedulerStall struct{ noSuppression }
 
-func (r *RuleRCUSchedulerStall) ID() string             { return "EDGE_RCU_SCHEDULER_STALL" }
-func (r *RuleRCUSchedulerStall) Tier() int              { return 3 }
-func (r *RuleRCUSchedulerStall) IsPIDDependent() bool   { return true }
+func (r *RuleRCUSchedulerStall) ID() string           { return "EDGE_RCU_SCHEDULER_STALL" }
+func (r *RuleRCUSchedulerStall) Tier() int            { return 3 }
+func (r *RuleRCUSchedulerStall) IsPIDDependent() bool { return true }
 
 func (r *RuleRCUSchedulerStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.Processes) == 0 {
@@ -755,9 +755,9 @@ func (r *RuleRCUSchedulerStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleTHPCollapseStall detects Transparent Huge Page background defragmentation and collapse latency.
 type RuleTHPCollapseStall struct{ noSuppression }
 
-func (r *RuleTHPCollapseStall) ID() string             { return "EDGE_THP_COLLAPSE_STALL" }
-func (r *RuleTHPCollapseStall) Tier() int              { return 3 }
-func (r *RuleTHPCollapseStall) IsPIDDependent() bool   { return false }
+func (r *RuleTHPCollapseStall) ID() string           { return "EDGE_THP_COLLAPSE_STALL" }
+func (r *RuleTHPCollapseStall) Tier() int            { return 3 }
+func (r *RuleTHPCollapseStall) IsPIDDependent() bool { return false }
 
 func (r *RuleTHPCollapseStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -789,9 +789,9 @@ func (r *RuleTHPCollapseStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleFUSEFilesystemLatency detects user processes stalled on unresponsive FUSE daemon wait queues.
 type RuleFUSEFilesystemLatency struct{ noSuppression }
 
-func (r *RuleFUSEFilesystemLatency) ID() string             { return "EDGE_FUSE_FS_STALL" }
-func (r *RuleFUSEFilesystemLatency) Tier() int              { return 3 }
-func (r *RuleFUSEFilesystemLatency) IsPIDDependent() bool   { return true }
+func (r *RuleFUSEFilesystemLatency) ID() string           { return "EDGE_FUSE_FS_STALL" }
+func (r *RuleFUSEFilesystemLatency) Tier() int            { return 3 }
+func (r *RuleFUSEFilesystemLatency) IsPIDDependent() bool { return true }
 
 func (r *RuleFUSEFilesystemLatency) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.Processes) == 0 {
@@ -810,13 +810,13 @@ func (r *RuleFUSEFilesystemLatency) Evaluate(diff *collector.SnapshotDiff) (*Dia
 	if len(fuseProcs) >= 1 {
 		topProc := fuseProcs[0]
 		return &Diagnosis{
-			RuleID:         r.ID(),
-			Tier:           3,
-			Severity:       SeverityMedium,
-			Confidence:     0.88,
-			Title:          "FUSE Filesystem User-Space Daemon Stall",
-			Explanation:    "Processes are blocked waiting for a FUSE (Filesystem in Userspace) daemon to respond to file I/O requests.",
-			Evidence:       []string{
+			RuleID:      r.ID(),
+			Tier:        3,
+			Severity:    SeverityMedium,
+			Confidence:  0.88,
+			Title:       "FUSE Filesystem User-Space Daemon Stall",
+			Explanation: "Processes are blocked waiting for a FUSE (Filesystem in Userspace) daemon to respond to file I/O requests.",
+			Evidence: []string{
 				fmt.Sprintf("Processes Blocked in FUSE Wait: %d tasks", len(fuseProcs)),
 				fmt.Sprintf("Representative Task: PID %d [%s] (wchan=%s)", topProc.PID, topProc.Comm, topProc.Wchan),
 			},
@@ -833,9 +833,9 @@ func (r *RuleFUSEFilesystemLatency) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleCompactionFailureRate detects high failure rate of memory compaction attempts causing fragmentation.
 type RuleCompactionFailureRate struct{ noSuppression }
 
-func (r *RuleCompactionFailureRate) ID() string             { return "EDGE_COMPACT_FAIL_RATE" }
-func (r *RuleCompactionFailureRate) Tier() int              { return 3 }
-func (r *RuleCompactionFailureRate) IsPIDDependent() bool   { return false }
+func (r *RuleCompactionFailureRate) ID() string           { return "EDGE_COMPACT_FAIL_RATE" }
+func (r *RuleCompactionFailureRate) Tier() int            { return 3 }
+func (r *RuleCompactionFailureRate) IsPIDDependent() bool { return false }
 
 func (r *RuleCompactionFailureRate) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -871,9 +871,9 @@ func (r *RuleCompactionFailureRate) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleMajorPageFaultStorm detects bursts of major page faults driving synchronous disk reads.
 type RuleMajorPageFaultStorm struct{ noSuppression }
 
-func (r *RuleMajorPageFaultStorm) ID() string             { return "EDGE_MAJOR_PAGE_FAULT_STORM" }
-func (r *RuleMajorPageFaultStorm) Tier() int              { return 3 }
-func (r *RuleMajorPageFaultStorm) IsPIDDependent() bool   { return false }
+func (r *RuleMajorPageFaultStorm) ID() string           { return "EDGE_MAJOR_PAGE_FAULT_STORM" }
+func (r *RuleMajorPageFaultStorm) Tier() int            { return 3 }
+func (r *RuleMajorPageFaultStorm) IsPIDDependent() bool { return false }
 
 func (r *RuleMajorPageFaultStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -952,12 +952,12 @@ func (r *RuleKHugepagedCPUBurn) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 
 	if khugepagedProc != nil && (diff.VMStat.THPCollapseAllocFailedDelta > 0 || diff.VMStat.CompactFailDelta > 0 || diff.VMStat.CompactStallDelta > 0) {
 		return &Diagnosis{
-			RuleID:         r.ID(),
-			Tier:           3,
-			Severity:       SeverityMedium,
-			Confidence:     0.88,
-			Title:          "Transparent Hugepage Daemon (khugepaged) CPU Thrash",
-			Explanation:    fmt.Sprintf("Background daemon 'khugepaged' is burning %.1f%% CPU scanning and attempting to collapse fragmented memory pages.", khugepagedProc.CPUPercent),
+			RuleID:      r.ID(),
+			Tier:        3,
+			Severity:    SeverityMedium,
+			Confidence:  0.88,
+			Title:       "Transparent Hugepage Daemon (khugepaged) CPU Thrash",
+			Explanation: fmt.Sprintf("Background daemon 'khugepaged' is burning %.1f%% CPU scanning and attempting to collapse fragmented memory pages.", khugepagedProc.CPUPercent),
 			Evidence: []string{
 				fmt.Sprintf("PID %d [khugepaged]: %.1f%% CPU utilization", khugepagedProc.PID, khugepagedProc.CPUPercent),
 				fmt.Sprintf("THP Failed Collapses Delta: %d failed allocations", diff.VMStat.THPCollapseAllocFailedDelta),
@@ -1025,12 +1025,12 @@ func (r *RuleKcompactdCPUSpin) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 
 	if kcompactdProc != nil && (diff.VMStat.CompactFailDelta > 0 || diff.VMStat.CompactStallDelta > 0 || diff.VMStat.AllocStallDirectDelta > 0) {
 		return &Diagnosis{
-			RuleID:         r.ID(),
-			Tier:           3,
-			Severity:       SeverityMedium,
-			Confidence:     0.88,
-			Title:          "Background Compaction Daemon (kcompactd) CPU Spin",
-			Explanation:    fmt.Sprintf("Kernel memory compaction daemon '%s' is consuming %.1f%% CPU attempting to defragment memory zones under high compaction failure rates.", kcompactdProc.Comm, kcompactdProc.CPUPercent),
+			RuleID:      r.ID(),
+			Tier:        3,
+			Severity:    SeverityMedium,
+			Confidence:  0.88,
+			Title:       "Background Compaction Daemon (kcompactd) CPU Spin",
+			Explanation: fmt.Sprintf("Kernel memory compaction daemon '%s' is consuming %.1f%% CPU attempting to defragment memory zones under high compaction failure rates.", kcompactdProc.Comm, kcompactdProc.CPUPercent),
 			Evidence: []string{
 				fmt.Sprintf("PID %d [%s]: %.1f%% CPU utilization", kcompactdProc.PID, kcompactdProc.Comm, kcompactdProc.CPUPercent),
 				fmt.Sprintf("Compaction Failures Delta: %d failed attempts", diff.VMStat.CompactFailDelta),
@@ -1106,12 +1106,12 @@ func (r *RuleCorePatternPipeStall) Evaluate(diff *collector.SnapshotDiff) (*Diag
 
 	if len(coredumpProcs) >= 2 {
 		return &Diagnosis{
-			RuleID:         r.ID(),
-			Tier:           3,
-			Severity:       SeverityMedium,
-			Confidence:     0.89,
-			Title:          "Core Dump Handler Pipe Serialization Stall",
-			Explanation:    fmt.Sprintf("%d crashing processes are hung in kernel 'do_coredump' waiting to pipe memory to a user-space core dumper helper.", len(coredumpProcs)),
+			RuleID:      r.ID(),
+			Tier:        3,
+			Severity:    SeverityMedium,
+			Confidence:  0.89,
+			Title:       "Core Dump Handler Pipe Serialization Stall",
+			Explanation: fmt.Sprintf("%d crashing processes are hung in kernel 'do_coredump' waiting to pipe memory to a user-space core dumper helper.", len(coredumpProcs)),
 			Evidence: []string{
 				fmt.Sprintf("%d processes blocked in coredump wchan", len(coredumpProcs)),
 				fmt.Sprintf("PID %d [%s] blocked in wchan '%s'", coredumpProcs[0].PID, coredumpProcs[0].Comm, coredumpProcs[0].Wchan),
@@ -1243,12 +1243,12 @@ func (r *RuleRTSchedThrottling) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 		// Policy 1 = SCHED_FIFO, 2 = SCHED_RR
 		if (p.Policy == 1 || p.Policy == 2) && p.CPUPercent >= 90.0 {
 			return &Diagnosis{
-				RuleID:         r.ID(),
-				Tier:           3,
-				Severity:       SeverityMedium,
-				Confidence:     0.89,
-				Title:          "Real-Time Scheduler (SCHED_FIFO/RR) Task Throttling",
-				Explanation:    fmt.Sprintf("Real-time process '%s' (PID %d) is consuming %.1f%% CPU and hitting kernel sched_rt_runtime_us throttling limit (%d μs).", p.Comm, p.PID, p.CPUPercent, rtLimit),
+				RuleID:      r.ID(),
+				Tier:        3,
+				Severity:    SeverityMedium,
+				Confidence:  0.89,
+				Title:       "Real-Time Scheduler (SCHED_FIFO/RR) Task Throttling",
+				Explanation: fmt.Sprintf("Real-time process '%s' (PID %d) is consuming %.1f%% CPU and hitting kernel sched_rt_runtime_us throttling limit (%d μs).", p.Comm, p.PID, p.CPUPercent, rtLimit),
 				Evidence: []string{
 					fmt.Sprintf("PID %d [%s]: Policy=%d (SCHED_FIFO/RR), CPU=%.1f%%", p.PID, p.Comm, p.Policy, p.CPUPercent),
 					fmt.Sprintf("Kernel sched_rt_runtime_us: %d μs limit", rtLimit),
@@ -1375,12 +1375,12 @@ func (r *RuleCgroupCFSBurstStarvation) Evaluate(diff *collector.SnapshotDiff) (*
 			}
 
 			return &Diagnosis{
-				RuleID:         r.ID(),
-				Tier:           3,
-				Severity:       SeverityMedium,
-				Confidence:     0.92,
-				Title:          "Cgroup v2 CFS CPU Burst Depletion & Throttling",
-				Explanation:    fmt.Sprintf("Cgroup '%s' used %.1fms of CPU burst allowance (%d bursts) but subsequently suffered %.1fms of throttling (%d periods throttled).", cg.Path, burstMS, cg.NrBurstsDelta, throttledMS, cg.NrThrottledDelta),
+				RuleID:      r.ID(),
+				Tier:        3,
+				Severity:    SeverityMedium,
+				Confidence:  0.92,
+				Title:       "Cgroup v2 CFS CPU Burst Depletion & Throttling",
+				Explanation: fmt.Sprintf("Cgroup '%s' used %.1fms of CPU burst allowance (%d bursts) but subsequently suffered %.1fms of throttling (%d periods throttled).", cg.Path, burstMS, cg.NrBurstsDelta, throttledMS, cg.NrThrottledDelta),
 				Evidence: []string{
 					fmt.Sprintf("Cgroup Path: %s", cg.Path),
 					fmt.Sprintf("CPU Burst Usage: %.1fms (%d burst events)", burstMS, cg.NrBurstsDelta),
@@ -2143,7 +2143,9 @@ func (r *RuleTHPUseZeroPageSpin) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleSysfsCPUHotplugLockContention detects serialization on kernel CPU hotplug or governor policy locks.
 type RuleSysfsCPUHotplugLockContention struct{ noSuppression }
 
-func (r *RuleSysfsCPUHotplugLockContention) ID() string           { return "EDGE_SYSFS_CPU_HOTPLUG_LOCK_CONTENTION" }
+func (r *RuleSysfsCPUHotplugLockContention) ID() string {
+	return "EDGE_SYSFS_CPU_HOTPLUG_LOCK_CONTENTION"
+}
 func (r *RuleSysfsCPUHotplugLockContention) Tier() int            { return 3 }
 func (r *RuleSysfsCPUHotplugLockContention) IsPIDDependent() bool { return true }
 
@@ -2188,7 +2190,9 @@ func (r *RuleSysfsCPUHotplugLockContention) Evaluate(diff *collector.SnapshotDif
 // RuleNetIPMulticastIGMPReportStall detects IP multicast group report queue saturation and packet drops.
 type RuleNetIPMulticastIGMPReportStall struct{ noSuppression }
 
-func (r *RuleNetIPMulticastIGMPReportStall) ID() string           { return "EDGE_NET_IP_MULTICAST_IGMP_REPORT_STALL" }
+func (r *RuleNetIPMulticastIGMPReportStall) ID() string {
+	return "EDGE_NET_IP_MULTICAST_IGMP_REPORT_STALL"
+}
 func (r *RuleNetIPMulticastIGMPReportStall) Tier() int            { return 3 }
 func (r *RuleNetIPMulticastIGMPReportStall) IsPIDDependent() bool { return false }
 
@@ -2669,13 +2673,3 @@ func (r *RuleProcZombieParentDeadlock) Evaluate(diff *collector.SnapshotDiff) (*
 
 	return nil, false
 }
-
-
-
-
-
-
-
-
-
-

@@ -111,4 +111,3 @@ func TestParseCgroupsFrozenMock(t *testing.T) {
 		t.Fatalf("expected Group Frozen true, got: %+v", info.Groups)
 	}
 }
-

@@ -70,13 +70,13 @@ The engine cleanly separates 5 distinct network failure modes without signal cro
 ```
                     ┌───► ListenDrops > 0 ──────────────► CONT_TCP_LISTEN_DROPS
                     │
-Ağ Tıkanıklığı ─────┼───► SYN Cookies Sent > 0 ────────► CONT_TCP_SYN_QUEUE_OVERFLOW
+Network Congestion ─┼───► SYN Cookies Sent > 0 ────────► CONT_TCP_SYN_QUEUE_OVERFLOW
                     │
                     ├───► TCP Memory Pressure & Abort ──► BASE_TCP_SOCKET_MEM_PRESS (Tier 1)
                     │
-                    ├───► TIME_WAIT %85+ ──────────────► CONT_TIMEWAIT_PORT_EXHAUSTION
+                    ├───► TIME_WAIT ≥ 85% ──────────────► CONT_TIMEWAIT_PORT_EXHAUSTION
                     │
-                    └───► Conntrack Tablosu %90+ ──────► CONT_CONNTRACK_EXHAUSTION
+                    └───► Conntrack Table ≥ 90% ────────► CONT_CONNTRACK_EXHAUSTION
 ```
 
 ---

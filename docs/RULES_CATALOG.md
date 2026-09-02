@@ -1,6 +1,6 @@
 # why-slow — Complete Diagnostic Rules Catalog
 
-This document details all **157 diagnostic rules** implemented in `why-slow`, organized by priority tier.
+This document details all **160 diagnostic rules** implemented in `why-slow`, organized by priority tier.
 
 ---
 
@@ -26,7 +26,7 @@ Tier 1 rules represent absolute, unrecoverable system capacity limits. When any 
 
 ---
 
-## 🟡 Tier 2: Contention & Queues (P1 Priority — 77 Rules)
+## 🟡 Tier 2: Contention & Queues (P1 Priority — 84 Rules)
 
 Tier 2 rules detect resource serialization, locking, queue saturation, and capacity contention bottlenecks.
 
@@ -113,10 +113,13 @@ Tier 2 rules detect resource serialization, locking, queue saturation, and capac
 | `CONT_PSI_SOME_CPU_PRESSURE_SPIKE` | High | Elevated Linux CPU Pressure Stall Spike (PSI cpu.some) | PSI CPU `some` avg10 $\ge 30.0\%$ | Renice background batch tasks, pin latency workloads, or scale CPU |
 | `CONT_PSI_FULL_MEMORY_PRESSURE_SPIKE` | High | Critical Memory Pressure Stall Spike (PSI memory.full) | PSI Memory `full` avg10 $\ge 15.0\%$ | Provision additional physical RAM, tune zram/zswap, or restrict memory |
 | `CONT_PIPE_READ_BURST_BLOCK` | High | Process Blocked on Pipe Read Wait | Process in `pipe_read` / `fifo_read` in D-state | Enlarge pipe buffer via `fcntl(F_SETPIPE_SZ)` or diagnose producer stall |
+| `CONT_RUNAWAY_CPU_PROCESS` | High | Runaway Compute CPU Hog | Process CPU $\ge 80.0\%$ on single core with standard policy | `renice -n 19 -p <PID>` or configure cgroup `cpu.max` |
+| `CONT_SUSTAINED_LOAD_SATURATION` | High | Sustained Multi-Minute CPU Runqueue Overload | Load1 $\ge 2\times\text{Cores}$ AND Load5 $\ge 1.5\times\text{Cores}$ | Scale out compute instances or audit thread pool concurrency |
+| `CONT_TCP_CLOSE_WAIT_LEAK` | High | Application TCP Socket Leak (CLOSE_WAIT Pileup) | CLOSE_WAIT sockets $\ge 100$ and ratio $\ge 10\%$ of established | Inspect application connection pool and HTTP client `body.Close()` |
 
 ---
 
-## 🔵 Tier 3: Subtle Kernel Edge Cases (P2 Priority — 67 Rules)
+## 🔵 Tier 3: Subtle Kernel Edge Cases (P2 Priority — 63 Rules)
 
 Tier 3 rules detect subtle driver, memory subsystem, and timekeeping edge cases that degrade latency without appearing in standard user-space monitoring.
 

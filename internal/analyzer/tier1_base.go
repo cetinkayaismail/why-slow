@@ -37,9 +37,9 @@ func GetTier1Rules() []Rule {
 // RuleCPUSaturation detects 100% CPU starvation with an overloaded runqueue.
 type RuleCPUSaturation struct{}
 
-func (r *RuleCPUSaturation) ID() string             { return "BASE_CPU_SATURATION" }
-func (r *RuleCPUSaturation) Tier() int              { return 1 }
-func (r *RuleCPUSaturation) IsPIDDependent() bool   { return true }
+func (r *RuleCPUSaturation) ID() string           { return "BASE_CPU_SATURATION" }
+func (r *RuleCPUSaturation) Tier() int            { return 1 }
+func (r *RuleCPUSaturation) IsPIDDependent() bool { return true }
 func (r *RuleCPUSaturation) Suppresses() []string {
 	return []string{"CONT_CONTEXT_SWITCH_STORM", "CONT_SCHED_RUNQUEUE_STARVATION", "CONT_RUNAWAY_CPU_PROCESS"}
 }
@@ -102,9 +102,9 @@ func findTopCPUProcess(procs []collector.ProcessDiff) *collector.ProcessDiff {
 // RuleOOMDanger detects immediate risk of out-of-memory kernel termination.
 type RuleOOMDanger struct{}
 
-func (r *RuleOOMDanger) ID() string             { return "BASE_OOM_DANGER" }
-func (r *RuleOOMDanger) Tier() int              { return 1 }
-func (r *RuleOOMDanger) IsPIDDependent() bool   { return true }
+func (r *RuleOOMDanger) ID() string           { return "BASE_OOM_DANGER" }
+func (r *RuleOOMDanger) Tier() int            { return 1 }
+func (r *RuleOOMDanger) IsPIDDependent() bool { return true }
 func (r *RuleOOMDanger) Suppresses() []string {
 	return []string{"CONT_KSWAPD_CPU_SPIN", "CONT_WORKING_SET_REFAULT_THRASHING", "CONT_SWAP_THRASHING", "CONT_MEMCG_RECLAIM_DIRECT_STALL"}
 }
@@ -174,9 +174,9 @@ func findTopOOMScoreProcess(procs []collector.ProcessDiff) *collector.ProcessDif
 // RuleDiskSpaceFull detects critical storage capacity exhaustion.
 type RuleDiskSpaceFull struct{ noSuppression }
 
-func (r *RuleDiskSpaceFull) ID() string             { return "BASE_DISK_SPACE_FULL" }
-func (r *RuleDiskSpaceFull) Tier() int              { return 1 }
-func (r *RuleDiskSpaceFull) IsPIDDependent() bool   { return false }
+func (r *RuleDiskSpaceFull) ID() string           { return "BASE_DISK_SPACE_FULL" }
+func (r *RuleDiskSpaceFull) Tier() int            { return 1 }
+func (r *RuleDiskSpaceFull) IsPIDDependent() bool { return false }
 
 func (r *RuleDiskSpaceFull) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -215,9 +215,9 @@ func (r *RuleDiskSpaceFull) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleDiskHWSaturation detects 100% hardware disk saturation.
 type RuleDiskHWSaturation struct{}
 
-func (r *RuleDiskHWSaturation) ID() string             { return "BASE_DISK_HARDWARE_SATURATION" }
-func (r *RuleDiskHWSaturation) Tier() int              { return 1 }
-func (r *RuleDiskHWSaturation) IsPIDDependent() bool   { return true }
+func (r *RuleDiskHWSaturation) ID() string           { return "BASE_DISK_HARDWARE_SATURATION" }
+func (r *RuleDiskHWSaturation) Tier() int            { return 1 }
+func (r *RuleDiskHWSaturation) IsPIDDependent() bool { return true }
 func (r *RuleDiskHWSaturation) Suppresses() []string {
 	return []string{"CONT_IO_SCHEDULER_QUEUE_LATENCY", "CONT_DSTATE_PILEUP"}
 }
@@ -284,9 +284,9 @@ func findTopWriterProcess(procs []collector.ProcessDiff) *collector.ProcessDiff 
 // RuleThermalThrottling detects hardware CPU throttling due to thermal overheating.
 type RuleThermalThrottling struct{ noSuppression }
 
-func (r *RuleThermalThrottling) ID() string             { return "BASE_THERMAL_THROTTLING" }
-func (r *RuleThermalThrottling) Tier() int              { return 1 }
-func (r *RuleThermalThrottling) IsPIDDependent() bool   { return false }
+func (r *RuleThermalThrottling) ID() string           { return "BASE_THERMAL_THROTTLING" }
+func (r *RuleThermalThrottling) Tier() int            { return 1 }
+func (r *RuleThermalThrottling) IsPIDDependent() bool { return false }
 
 func (r *RuleThermalThrottling) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -333,9 +333,9 @@ func (r *RuleThermalThrottling) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleInodeExhaustion detects filesystem inode table exhaustion.
 type RuleInodeExhaustion struct{ noSuppression }
 
-func (r *RuleInodeExhaustion) ID() string             { return "BASE_INODE_EXHAUSTION" }
-func (r *RuleInodeExhaustion) Tier() int              { return 1 }
-func (r *RuleInodeExhaustion) IsPIDDependent() bool   { return false }
+func (r *RuleInodeExhaustion) ID() string           { return "BASE_INODE_EXHAUSTION" }
+func (r *RuleInodeExhaustion) Tier() int            { return 1 }
+func (r *RuleInodeExhaustion) IsPIDDependent() bool { return false }
 
 func (r *RuleInodeExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -374,9 +374,9 @@ func (r *RuleInodeExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 // RuleIOServiceLatency detects excessive block I/O service latencies on SAN/EBS/NVMe volumes.
 type RuleIOServiceLatency struct{ noSuppression }
 
-func (r *RuleIOServiceLatency) ID() string             { return "BASE_IO_SERVICE_LATENCY" }
-func (r *RuleIOServiceLatency) Tier() int              { return 1 }
-func (r *RuleIOServiceLatency) IsPIDDependent() bool   { return false }
+func (r *RuleIOServiceLatency) ID() string           { return "BASE_IO_SERVICE_LATENCY" }
+func (r *RuleIOServiceLatency) Tier() int            { return 1 }
+func (r *RuleIOServiceLatency) IsPIDDependent() bool { return false }
 
 func (r *RuleIOServiceLatency) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.Disks) == 0 {
@@ -424,9 +424,9 @@ func (r *RuleIOServiceLatency) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleTCPSocketMemoryPressure detects kernel TCP socket buffer exhaustion and connection aborts.
 type RuleTCPSocketMemoryPressure struct{ noSuppression }
 
-func (r *RuleTCPSocketMemoryPressure) ID() string             { return "BASE_TCP_SOCKET_MEM_PRESS" }
-func (r *RuleTCPSocketMemoryPressure) Tier() int              { return 1 }
-func (r *RuleTCPSocketMemoryPressure) IsPIDDependent() bool   { return false }
+func (r *RuleTCPSocketMemoryPressure) ID() string           { return "BASE_TCP_SOCKET_MEM_PRESS" }
+func (r *RuleTCPSocketMemoryPressure) Tier() int            { return 1 }
+func (r *RuleTCPSocketMemoryPressure) IsPIDDependent() bool { return false }
 
 func (r *RuleTCPSocketMemoryPressure) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -464,9 +464,9 @@ func (r *RuleTCPSocketMemoryPressure) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleSwapDeviceSaturation detects swap storage subsystem saturation from massive page in/out traffic.
 type RuleSwapDeviceSaturation struct{ noSuppression }
 
-func (r *RuleSwapDeviceSaturation) ID() string             { return "BASE_SWAP_DEVICE_SATURATION" }
-func (r *RuleSwapDeviceSaturation) Tier() int              { return 1 }
-func (r *RuleSwapDeviceSaturation) IsPIDDependent() bool   { return false }
+func (r *RuleSwapDeviceSaturation) ID() string           { return "BASE_SWAP_DEVICE_SATURATION" }
+func (r *RuleSwapDeviceSaturation) Tier() int            { return 1 }
+func (r *RuleSwapDeviceSaturation) IsPIDDependent() bool { return false }
 
 func (r *RuleSwapDeviceSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -649,4 +649,3 @@ func (r *RuleConntrackTableHardDrop) Evaluate(diff *collector.SnapshotDiff) (*Di
 
 	return nil, false
 }
-

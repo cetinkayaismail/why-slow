@@ -2028,15 +2028,3 @@ func TestRuleProcZombieParentDeadlock(t *testing.T) {
 		t.Errorf("expected CulpritPID 10, got %d", diag.CulpritPID)
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
