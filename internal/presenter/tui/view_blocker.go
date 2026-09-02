@@ -6,7 +6,7 @@ import (
 	"why-slow/internal/analyzer"
 )
 
-// RenderPrimaryBlocker draws the central explanatory diagnosis card with multi-issue paging support.
+// RenderPrimaryBlocker draws the central explanatory diagnosis card with multi-issue display and word wrapping.
 func RenderPrimaryBlocker(s *Screen, theme *Theme, report *analyzer.DiagnosticReport, activeIssueIdx, startY, width, height int) {
 	contentW := width - 6
 	if contentW <= 0 {
@@ -24,22 +24,89 @@ func RenderPrimaryBlocker(s *Screen, theme *Theme, report *analyzer.DiagnosticRe
 	}
 	diag := allIssues[activeIssueIdx]
 
-	badge := theme.SeverityBadge(string(diag.Severity))
-	confStr := fmt.Sprintf("(Tier %d | Conf: %.0f%%)", diag.Tier, diag.Confidence*100)
-
 	boxTitle := "PRIMARY BOTTLENECK & ROOT CAUSE"
 	if len(allIssues) > 1 {
-		boxTitle = fmt.Sprintf("ACTIVE ISSUE [%d of %d] — Press 'n' (Next) / 'm' (Prev)", activeIssueIdx+1, len(allIssues))
+		boxTitle = fmt.Sprintf("ACTIVE ISSUES [%d of %d] — Press [1]..[%d] Select | 'n'/'m' Cycle | 'r' All Remedies",
+			activeIssueIdx+1, len(allIssues), len(allIssues))
 	}
-
-	title := fmt.Sprintf("%s %s %s", badge, theme.Colorize(diag.Title, Bold), theme.Colorize(confStr, Dim))
 	s.DrawBox(1, startY, width, height, boxTitle)
 
-	s.PrintLineAt(startY+1, 3, contentW, title)
-	s.PrintLineAt(startY+2, 3, contentW, fmt.Sprintf("• Explanation: %s", diag.Explanation))
+	maxY := startY + height - 2
+	curY := startY + 1
 
-	renderEvidence(s, theme, diag.Evidence, startY+3, contentW)
-	renderCulpritAndFix(s, theme, diag, startY+5, contentW)
+	// Render Active Issue in detail
+	curY = renderDetailedIssue(s, theme, diag, activeIssueIdx+1, curY, contentW, maxY)
+
+	// Render summary of other active issues and their remedies
+	if len(allIssues) > 1 && curY <= maxY {
+		curY = renderOtherIssuesSummary(s, theme, allIssues, activeIssueIdx, curY, contentW, maxY)
+	}
+
+	// Blank any remaining rows inside box
+	for r := curY; r <= maxY; r++ {
+		s.PrintLineAt(r, 3, contentW, "")
+	}
+}
+
+func renderDetailedIssue(s *Screen, theme *Theme, diag *analyzer.Diagnosis, num, curY, contentW, maxY int) int {
+	if curY > maxY {
+		return curY
+	}
+	badge := theme.SeverityBadge(string(diag.Severity))
+	confStr := fmt.Sprintf("(Tier %d | Conf: %.0f%%)", diag.Tier, diag.Confidence*100)
+	title := fmt.Sprintf("[%d] %s %s %s", num, badge, theme.Colorize(diag.Title, Bold), theme.Colorize(confStr, Dim))
+	s.PrintLineAt(curY, 3, contentW, title)
+	curY++
+
+	if curY <= maxY {
+		if diag.CulpritPID > 0 {
+			culpritStr := fmt.Sprintf("• Culprit: PID %d [%s] — %s  [Press 'x' to Remedy]", diag.CulpritPID, diag.CulpritName, diag.CulpritDetails)
+			s.PrintLineAt(curY, 3, contentW, theme.Colorize(culpritStr, Bold+FgHiYellow))
+		} else {
+			s.PrintLineAt(curY, 3, contentW, theme.Colorize("• Scope: System-wide hardware / kernel contention  [Press 'r' for Playbook]", Dim))
+		}
+		curY++
+	}
+
+	if curY <= maxY-1 {
+		expLines := WrapText("• Explanation: "+diag.Explanation, contentW)
+		for _, l := range expLines {
+			if curY > maxY-1 {
+				break
+			}
+			s.PrintLineAt(curY, 3, contentW, l)
+			curY++
+		}
+	}
+
+	if curY <= maxY && diag.Remediation != "" {
+		remLines := WrapText("• Actionable Remedy: "+diag.Remediation, contentW)
+		for _, l := range remLines {
+			if curY > maxY {
+				break
+			}
+			s.PrintLineAt(curY, 3, contentW, theme.Colorize(l, Bold+FgHiCyan))
+			curY++
+		}
+	}
+	return curY
+}
+
+func renderOtherIssuesSummary(s *Screen, theme *Theme, allIssues []*analyzer.Diagnosis, activeIdx, curY, contentW, maxY int) int {
+	for i, other := range allIssues {
+		if i == activeIdx || curY > maxY {
+			continue
+		}
+		badgeOther := theme.SeverityBadge(string(other.Severity))
+		rem := other.Remediation
+		if rem == "" {
+			rem = "See details"
+		}
+		otherLine := fmt.Sprintf("• [%d] %s %s ➔ %s [Press '%d']", i+1, badgeOther, other.Title, rem, i+1)
+		s.PrintLineAt(curY, 3, contentW, theme.Colorize(otherLine, FgHiWhite))
+		curY++
+	}
+	return curY
 }
 
 // GetAllActiveIssues aggregates primary blocker and contributing/secondary issues.
@@ -68,34 +135,5 @@ func renderHealthyCard(s *Screen, theme *Theme, startY, width, height, contentW 
 
 	for r := startY + 3; r < startY+height-1; r++ {
 		s.PrintLineAt(r, 3, contentW, "")
-	}
-}
-
-func renderEvidence(s *Screen, theme *Theme, evidence []string, startY, contentW int) {
-	var evStr string
-	if len(evidence) == 0 {
-		evStr = "• Evidence: Telemetry indicates localized threshold anomaly."
-	} else if len(evidence) == 1 {
-		evStr = fmt.Sprintf("• Evidence: %s", evidence[0])
-	} else {
-		evStr = fmt.Sprintf("• Evidence: %s | %s", evidence[0], evidence[1])
-	}
-	s.PrintLineAt(startY, 3, contentW, theme.Colorize(evStr, Dim))
-	s.PrintLineAt(startY+1, 3, contentW, "")
-}
-
-func renderCulpritAndFix(s *Screen, theme *Theme, diag *analyzer.Diagnosis, startY, contentW int) {
-	if diag.CulpritPID > 0 {
-		culpritStr := fmt.Sprintf("• Culprit: PID %d [%s] — %s   [f: Jump & Lock Cursor]", diag.CulpritPID, diag.CulpritName, diag.CulpritDetails)
-		s.PrintLineAt(startY, 3, contentW, theme.Colorize(culpritStr, Bold+FgHiYellow))
-	} else {
-		s.PrintLineAt(startY, 3, contentW, theme.Colorize("• Scope: System-wide kernel contention", Dim))
-	}
-
-	if diag.Remediation != "" {
-		fixStr := fmt.Sprintf("• [x] Actionable Remedy: %s", diag.Remediation)
-		s.PrintLineAt(startY+1, 3, contentW, theme.Colorize(fixStr, Bold+FgHiCyan))
-	} else {
-		s.PrintLineAt(startY+1, 3, contentW, "")
 	}
 }

@@ -22,19 +22,21 @@ const (
 	ModalBlastRadius
 	ModalHelp
 	ModalCausalTree
+	ModalAllRemedies
 )
 
 // UIState encapsulates the real-time state of the interactive console.
 type UIState struct {
-	IsFrozen       bool
-	ActiveModal    ActiveModal
-	TableState     TableState
-	LastReport     *analyzer.DiagnosticReport
-	LastDiff       *collector.SnapshotDiff
-	PrevSnapshot   *collector.SystemSnapshot
-	ActiveIssueIdx int
-	StatusMessage  string
-	Theme          *Theme
+	IsFrozen             bool
+	ActiveModal          ActiveModal
+	TableState           TableState
+	LastReport           *analyzer.DiagnosticReport
+	LastDiff             *collector.SnapshotDiff
+	PrevSnapshot         *collector.SystemSnapshot
+	ActiveIssueIdx       int
+	SelectedRemedyAction RemedyActionType
+	StatusMessage        string
+	Theme                *Theme
 }
 
 // RunTUI launches the full-screen interactive diagnostic dashboard.
@@ -177,13 +179,44 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 	case "s": // Save report
 		saveReport(state)
 	case "1":
-		state.TableState.SortMode = SortByCPU
+		if state.ActiveModal == ModalBlastRadius {
+			state.SelectedRemedyAction = ActionThrottleNice19
+		} else {
+			allIssues := GetAllActiveIssues(state.LastReport)
+			if len(allIssues) >= 1 {
+				state.ActiveIssueIdx = 0
+				syncCursorToCulprit(state, allIssues[0].CulpritPID)
+			}
+			state.TableState.SortMode = SortByCPU
+		}
 	case "2":
-		state.TableState.SortMode = SortByMemory
+		if state.ActiveModal == ModalBlastRadius {
+			state.SelectedRemedyAction = ActionGracefulSigterm
+		} else {
+			allIssues := GetAllActiveIssues(state.LastReport)
+			if len(allIssues) >= 2 {
+				state.ActiveIssueIdx = 1
+				syncCursorToCulprit(state, allIssues[1].CulpritPID)
+			} else {
+				state.TableState.SortMode = SortByMemory
+			}
+		}
 	case "3":
-		state.TableState.SortMode = SortByIO
+		if state.ActiveModal == ModalBlastRadius {
+			state.SelectedRemedyAction = ActionForceSigkill
+		} else {
+			allIssues := GetAllActiveIssues(state.LastReport)
+			if len(allIssues) >= 3 {
+				state.ActiveIssueIdx = 2
+				syncCursorToCulprit(state, allIssues[2].CulpritPID)
+			} else {
+				state.TableState.SortMode = SortByIO
+			}
+		}
 	case "4":
 		state.TableState.SortMode = SortByDState
+	case "r":
+		toggleModal(state, ModalAllRemedies)
 	case "?":
 		toggleModal(state, ModalHelp)
 	case "c":
@@ -193,6 +226,17 @@ func handleKeyPress(key string, state *UIState, screen *Screen) bool {
 	case "\r", "\n":
 		toggleModal(state, ModalDrilldown)
 	case "x":
+		state.SelectedRemedyAction = ActionThrottleNice19
+		allIssues := GetAllActiveIssues(state.LastReport)
+		if len(allIssues) > 0 {
+			if state.ActiveIssueIdx >= len(allIssues) {
+				state.ActiveIssueIdx = 0
+			}
+			diag := allIssues[state.ActiveIssueIdx]
+			if diag.CulpritPID > 0 {
+				syncCursorToCulprit(state, diag.CulpritPID)
+			}
+		}
 		toggleModal(state, ModalBlastRadius)
 	case "\x1b": // Esc
 		state.ActiveModal = ModalNone
@@ -289,6 +333,8 @@ func cycleModal(state *UIState) {
 	case ModalDrilldown:
 		state.ActiveModal = ModalCausalTree
 	case ModalCausalTree:
+		state.ActiveModal = ModalAllRemedies
+	case ModalAllRemedies:
 		state.ActiveModal = ModalHelp
 	default:
 		state.ActiveModal = ModalNone
@@ -318,12 +364,13 @@ func applyRemedyAction(state *UIState) {
 	if state.LastDiff == nil || len(state.LastDiff.Processes) == 0 {
 		return
 	}
-	idx := state.TableState.CursorIdx
-	if idx >= len(state.LastDiff.Processes) {
+	culpritPIDs := getAllCulpritPIDs(state.LastReport)
+	sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPIDs)
+	if state.TableState.CursorIdx >= len(sorted) {
 		return
 	}
-	p := state.LastDiff.Processes[idx]
-	_ = syscall.Setpriority(syscall.PRIO_PROCESS, p.PID, 19)
+	p := sorted[state.TableState.CursorIdx]
+	_ = ExecuteRemedy(p.PID, state.SelectedRemedyAction)
 	state.ActiveModal = ModalNone
 }
 
@@ -337,7 +384,14 @@ func renderFrame(s *Screen, state *UIState, fd int) {
 
 	RenderHeader(s, state.Theme, state.LastReport, state.LastDiff, w)
 
+	allIssues := GetAllActiveIssues(state.LastReport)
 	blockerH := 8
+	if len(allIssues) > 1 && h >= 30 {
+		blockerH = 10
+		if len(allIssues) > 2 && h >= 36 {
+			blockerH = 12
+		}
+	}
 	RenderPrimaryBlocker(s, state.Theme, state.LastReport, state.ActiveIssueIdx, 6, w, blockerH)
 
 	tableY := 6 + blockerH
@@ -360,6 +414,8 @@ func renderActiveModal(s *Screen, state *UIState, culpritPIDs []int, w, h int) {
 		RenderHelpModal(s, state.Theme, w, h)
 	case ModalCausalTree:
 		RenderCausalTreeModal(s, state.Theme, state.LastReport, w, h)
+	case ModalAllRemedies:
+		RenderAllRemediesModal(s, state.Theme, state.LastReport, w, h)
 	case ModalDrilldown:
 		if state.LastDiff != nil && len(state.LastDiff.Processes) > 0 {
 			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPIDs)
@@ -373,9 +429,24 @@ func renderActiveModal(s *Screen, state *UIState, culpritPIDs []int, w, h int) {
 			sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPIDs)
 			if state.TableState.CursorIdx < len(sorted) {
 				p := sorted[state.TableState.CursorIdx]
-				impact := AssessBlastRadius(p.PID, p.Comm, state.LastDiff.Processes, state.LastReport.PrimaryBlocker)
-				RenderBlastRadiusModal(s, state.Theme, p.PID, p.Comm, impact, w, h)
+				impact := AssessBlastRadius(p.PID, p.Comm, state.LastDiff.Processes, state.LastReport.PrimaryBlocker, state.SelectedRemedyAction)
+				RenderBlastRadiusModal(s, state.Theme, &p, impact, w, h)
 			}
+		}
+	}
+}
+
+func syncCursorToCulprit(state *UIState, culpritPID int) {
+	if culpritPID <= 0 || state.LastDiff == nil || len(state.LastDiff.Processes) == 0 {
+		return
+	}
+	culpritPIDs := getAllCulpritPIDs(state.LastReport)
+	sorted := sortProcesses(state.LastDiff.Processes, state.TableState.SortMode, culpritPIDs)
+	for i, p := range sorted {
+		if p.PID == culpritPID {
+			state.TableState.CursorIdx = i
+			state.TableState.SelectedPID = p.PID
+			return
 		}
 	}
 }

@@ -9,7 +9,7 @@ import (
 
 func TestAssessBlastRadius(t *testing.T) {
 	// Protected PID 1
-	impact1 := AssessBlastRadius(1, "systemd", nil, nil)
+	impact1 := AssessBlastRadius(1, "systemd", nil, nil, ActionThrottleNice19)
 	if !impact1.IsBlocked {
 		t.Errorf("expected PID 1 to be blocked by safety gate")
 	}
@@ -21,7 +21,7 @@ func TestAssessBlastRadius(t *testing.T) {
 		{PID: 102, Comm: "worker2", PPID: 100},
 	}
 	diag := &analyzer.Diagnosis{Remediation: "renice -n 19 -p 100"}
-	impact100 := AssessBlastRadius(100, "master", procs, diag)
+	impact100 := AssessBlastRadius(100, "master", procs, diag, ActionThrottleNice19)
 	if impact100.IsBlocked {
 		t.Errorf("expected PID 100 not to be blocked")
 	}
@@ -99,5 +99,47 @@ func TestRenderHeaderAndModals(t *testing.T) {
 	out := buf.String()
 	if len(out) == 0 {
 		t.Errorf("expected rendered output in buffer")
+	}
+}
+
+func TestWrapText(t *testing.T) {
+	text := "This is a long sentence that should be wrapped across multiple lines cleanly."
+	lines := WrapText(text, 20)
+	if len(lines) < 2 {
+		t.Errorf("expected text to wrap into at least 2 lines, got %d", len(lines))
+	}
+	for _, l := range lines {
+		if len(l) > 20 {
+			t.Errorf("line length %d exceeds max width 20: %q", len(l), l)
+		}
+	}
+}
+
+func TestRenderAllRemediesModal(t *testing.T) {
+	theme := NewTheme(true)
+	screen := NewScreen(80, 24, theme)
+	report := &analyzer.DiagnosticReport{
+		PrimaryBlocker: &analyzer.Diagnosis{
+			Title:       "Thermal Throttling",
+			Severity:    analyzer.SeverityCritical,
+			Remediation: "Check cooling fans and thermal paste.",
+		},
+		ContributingFactors: []analyzer.Diagnosis{
+			{
+				Title:       "Runaway CPU Process",
+				Severity:    analyzer.SeverityHigh,
+				CulpritPID:  1234,
+				CulpritName: "burner",
+				Remediation: "renice -n 19 -p 1234",
+			},
+		},
+	}
+	RenderAllRemediesModal(screen, theme, report, 80, 24)
+	var buf bytes.Buffer
+	if err := screen.Flush(&buf); err != nil {
+		t.Fatalf("unexpected flush error: %v", err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("REMEDIES")) {
+		t.Errorf("expected REMEDIES modal in output buffer")
 	}
 }

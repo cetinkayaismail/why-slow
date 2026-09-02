@@ -199,3 +199,33 @@ func TruncateVisible(s string, maxWidth int) string {
 	return b.String()
 }
 
+// WrapText splits a text string into multiple lines fitting within maxWidth.
+func WrapText(text string, maxWidth int) []string {
+	if maxWidth <= 0 {
+		return nil
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return nil
+	}
+	var lines []string
+	var curLine strings.Builder
+
+	for _, w := range words {
+		if curLine.Len() == 0 {
+			curLine.WriteString(w)
+		} else if curLine.Len()+1+len(w) <= maxWidth {
+			curLine.WriteByte(' ')
+			curLine.WriteString(w)
+		} else {
+			lines = append(lines, curLine.String())
+			curLine.Reset()
+			curLine.WriteString(w)
+		}
+	}
+	if curLine.Len() > 0 {
+		lines = append(lines, curLine.String())
+	}
+	return lines
+}
+

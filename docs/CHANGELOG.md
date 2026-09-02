@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.20.1] - 2026-09-02
+
+### Added
+- **TUI All Remedies Playbook Modal (`r` key)**:
+  - New full-screen `ModalAllRemedies` (`internal/presenter/tui/modal_all_remedies.go`) displaying every active bottleneck, root cause, and concrete copyable remediation command without truncation.
+- **Terminal Word-Wrapping Engine (`WrapText`)**:
+  - Word-wrapping in `internal/presenter/tui/styles.go` ensuring long explanations and remedy instructions wrap cleanly across multiple lines.
+- **Multi-Issue Display & Quick Navigation**:
+  - Active Issues card now lists all active bottlenecks and remedies simultaneously, with direct `1`..`3` key navigation and automatic cursor synchronization to culprit PIDs.
+- **Interactive Remedy Strategy Pill Indicators**:
+  - High-contrast visual active indicators in `RenderBlastRadiusModal` (`[● 1] Throttle`, `[● 2] Graceful SIGTERM`, `[● 3] Force SIGKILL`).
+
 ## [0.20.0] - 2026-08-31
 
 ### Added
