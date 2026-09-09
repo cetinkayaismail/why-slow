@@ -34,6 +34,7 @@ core.*
 # Internal test suites and temporary directories
 internal_tests/
 docs/internal/
+docs/future_plans/
 scratch/
 
 # Local agent artifacts, knowledge graphs, and scratch plans
