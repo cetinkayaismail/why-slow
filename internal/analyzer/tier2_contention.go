@@ -104,13 +104,992 @@ func GetTier2Rules() []Rule {
 		&RuleTCPCloseWaitLeak{},
 		&RuleSustainedLoadSaturation{},
 		&RuleRunawayCPUProcess{},
+		&RuleProcessSwapPinned{},
+		&RuleDentryCacheExplosion{},
 	}
+}
+
+var tier2Explanations = map[string]RuleExplanation{
+	"CONT_DSTATE_PILEUP": {
+		Description: "Processes are frozen in uninterruptible sleep waiting for I/O.",
+		Thresholds: []string{
+			"≥ 3 PIDs with state `D` in `/proc/[pid]/status`.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/status",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "Investigate slow storage devices, unresponsive NFS mounts, or lower process I/O class using ionice.",
+	},
+	"CONT_SWAP_THRASHING": {
+		Description: "Kernel is spending CPU time scanning and swapping pages instead of running applications.",
+		Thresholds: []string{
+			"`pgscan_direct` delta > 0 AND `allocstall_direct` delta > 0 AND PSI memory `some` > 30%.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "Reduce memory pressure, lower sysctl vm.swappiness, or add swap on fast storage.",
+	},
+	"CONT_CGROUP_THROTTLED": {
+		Description: "A container or systemd service hit its CPU quota and is being slowed by the kernel.",
+		Thresholds: []string{
+			"`throttled_usec` delta > 100,000 (100ms) AND `nr_throttled` delta > 0.",
+		},
+		KernelSources: []string{
+			"/sys/fs/cgroup/",
+		},
+		Remediation: "Increase CPU quota in container or service slice definition ('cpu.max' for %s).",
+	},
+	"CONT_FD_EXHAUSTION": {
+		Description: "A process is about to run out of file descriptors, causing `accept()` / `open()` failures.",
+		Thresholds: []string{
+			"FD count (entries in `/proc/[pid]/fd/`) > 90% of soft limit from `/proc/[pid]/limits`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Increase file descriptor soft limit: prlimit --nofile=%d:%d -p %d",
+	},
+	"CONT_SOFTIRQ_UNBALANCE": {
+		Description: "Network interrupt processing is bottlenecked on a single CPU core.",
+		Thresholds: []string{
+			"Any single core's softirq% > 80% while aggregate system idle > 50%.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Enable network Receive Packet Steering (RPS/RFS) or configure irqbalance.",
+	},
+	"CONT_TCP_LISTEN_DROPS": {
+		Description: "Incoming TCP connections are being silently dropped because the accept queue is full.",
+		Thresholds: []string{
+			"`ListenDrops` delta > 0 from `/proc/net/netstat`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Increase system socket backlog: sysctl -w net.core.somaxconn=4096 and raise application backlog setting.",
+	},
+	"CONT_PID_EXHAUSTION": {
+		Description: "System PID table allocation is nearing the kernel ceiling, risking `fork()` / `pthread_create()` `EAGAIN` failures.",
+		Thresholds: []string{
+			"Scanned process count ≥ 95% of `/proc/sys/kernel/pid_max`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w kernel.pid_max=4194304`.",
+	},
+	"CONT_TIMEWAIT_PORT_EXHAUSTION": {
+		Description: "Heavy short-lived TCP connection churn has filled ephemeral outbound ports with TIME_WAIT sockets, causing `connect()` `EADDRNOTAVAIL` errors.",
+		Thresholds: []string{
+			"`TCPTimeWait` from `/proc/net/sockstat` ≥ 85% of available ephemeral port capacity (`ip_local_port_range`).",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_tw_reuse=1` and enable HTTP keep-alive.",
+	},
+	"CONT_VCPU_STEAL_TIME": {
+		Description: "Hypervisor host is overcommitted and stealing execution cycles for noisy neighbor VMs.",
+		Thresholds: []string{
+			"`StealPercent >= 15%` aggregate or `StealPercent >= 30%` on any individual core.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Configure hypervisor vCPU reservations or pin vCPUs to physical cores.",
+	},
+	"CONT_BALLOON_OVERCOMMIT": {
+		Description: "Hypervisor is forcefully reclaiming memory via ballooning or overcommit pressure.",
+		Thresholds: []string{
+			"Balloon driver inflating `≥ 20%` of guest physical RAM or available RAM < 15%.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Configure fixed hypervisor memory reservations (`virsh setmem` / VMware Memory Reservation).",
+	},
+	"CONT_CONNTRACK_EXHAUSTION": {
+		Description: "Netfilter connection tracking table is saturated in Kubernetes/NAT gateway, causing silent packet drops.",
+		Thresholds: []string{
+			"`nf_conntrack_count >= 90%` of `nf_conntrack_max`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w net.netfilter.nf_conntrack_max=1048576`.",
+	},
+	"CONT_ARP_NEIGHBOR_OVERFLOW": {
+		Description: "ARP / Neighbor table cache is saturated in large flat subnets or Kubernetes nodes, dropping new outbound packets.",
+		Thresholds: []string{
+			"Active entries in `/proc/net/arp` ≥ 85% of `/proc/sys/net/ipv4/neigh/default/gc_thresh3`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.neigh.default.gc_thresh3=4096`.",
+	},
+	"CONT_TCP_SYN_QUEUE_OVERFLOW": {
+		Description: "Inbound TCP half-open connection requests exceed the kernel SYN backlog queue before handshakes complete.",
+		Thresholds: []string{
+			"Delta in `ListenOverflows > 0` or `TCPReqQFullDoCookies > 0` in `/proc/net/netstat`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_max_syn_backlog=65535` and `sysctl -w net.core.somaxconn=65535`.",
+	},
+	"CONT_BLK_MQ_TAG_STARVATION": {
+		Description: "High-throughput I/O processes are blocked waiting for NVMe/SSD hardware queue submission tags (`blk_mq_get_tag`).",
+		Thresholds: []string{
+			"Multiple processes with `wchan` matching `blk_mq_get_tag` or `io_schedule` with active I/O deltas.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`echo 1024 > /sys/block/<device>/queue/nr_requests` or tune async I/O / io_uring queue depths.",
+	},
+	"CONT_SCHED_RUNQUEUE_STARVATION": {
+		Description: "Threads spend excessive time waiting in scheduler runqueues before being dispatched to CPU cores.",
+		Thresholds: []string{
+			"Ratio of `RunqueueWaitTimeMS` to `RunningTimeMS` ≥ 1.5 in `/proc/schedstat` with running time > 100ms.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Reduce thread concurrency / worker pool size or tune `kernel.sched_migration_cost_ns`.",
+	},
+	"CONT_CGROUP_MEM_HIGH_THROTTLE": {
+		Description: "Cgroup v2 `memory.high` soft limit exceeded, causing the kernel to inject proactive allocation delay sleeps into processes.",
+		Thresholds: []string{
+			"Delta in cgroup v2 `memory.events` `high > 0`.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "Increase container memory soft limit: `echo <bytes> > /sys/fs/cgroup<path>/memory.high`.",
+	},
+	"CONT_IO_QUEUE_LATENCY": {
+		Description: "I/O requests on a block device are spending excessive time waiting in scheduler queues before dispatch.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Change I/O scheduler to none (or mq-deadline for HDD) or raise nr_requests queue depth.",
+	},
+	"CONT_PAGE_TABLE_LOCK": {
+		Description: "Multiple threads are stalled contending for mmap_lock / page table locks during concurrent memory mapping, page faulting, or thread allocation.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Reduce thread concurrency in memory-intensive workers or switch to jemalloc / tcmalloc arena allocator.",
+	},
+	"CONT_ORPHAN_SOCKET_LEAK": {
+		Description: "System has an excessive number of orphan TCP sockets detached from user applications, consuming kernel network buffer memory.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Inspect applications for abrupt TCP connection termination without orderly close, or raise sysctl net.ipv4.tcp_max_orphans.",
+	},
+	"CONT_CONTEXT_SWITCH_STORM": {
+		Description: "The kernel CPU scheduler is thrashing under extreme context switch volume, burning system CPU cycles in dispatch rather than compute.",
+		Thresholds: []string{
+			"`ContextSwitchesDelta / sec >= 100,000` AND `SystemPercent >= 20.0%` with `IdlePercent < 25.0%`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Reduce concurrency / thread pool size, batch I/O operations, or eliminate busy-wait polling loops.",
+	},
+	"CONT_CPU_GOVERNOR_POWERSAVE_LAG": {
+		Description: "CPU frequency scaling governor is set to `powersave`, clamping active compute cores to low base frequencies under heavy load.",
+		Thresholds: []string{
+			"`TotalCPUUtil.BusyPercent >= 75.0%` AND any core in `powersave` with `cur_freq <= 0.5 * max_freq`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`.",
+	},
+	"CONT_KSOFTIRQD_SATURATION": {
+		Description: "Software interrupt handler daemon (`ksoftirqd/X`) is pegged at high CPU processing unbatched softirqs (network RX/TX, timers).",
+		Thresholds: []string{
+			"Process `ksoftirqd/*` CPU% $\\ge 40.0\\%$ AND `SoftIRQPercent >= 20.0%`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Enable Receive Packet Steering (RPS/RFS), configure NIC multiqueue, or raise `sysctl net.core.netdev_budget=600`.",
+	},
+	"CONT_WORKINGSET_REFAULT_THRASHING": {
+		Description: "Evicted page cache files are immediately being read back from disk under memory pressure, causing disk latency spikes.",
+		Thresholds: []string{
+			"`WorkingsetRefaultFileDelta >= 5000` AND (`AllocStallDirectDelta > 0` OR `PgScanDirectDelta > 0` OR PSI memory $\\ge 15\\%$).",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Add physical RAM, downsize active application caches, or pin hot data with `vmtouch`.",
+	},
+	"CONT_DIRTY_PAGE_FLUSH_SATURATION": {
+		Description: "Saturated dirty/writeback memory buffers force applications into synchronous `balance_dirty_pages` throttle sleeps.",
+		Thresholds: []string{
+			"`Dirty >= 15% MemTotal` OR `Writeback >= 10% MemTotal` with process in `balance_dirty_pages` wchan.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Lower `sysctl -w vm.dirty_background_ratio=5` or upgrade storage write bandwidth.",
+	},
+	"CONT_FSYNC_JOURNAL_STALL": {
+		Description: "Multiple processes serialized waiting on filesystem journal transaction commit (e.g. ext4 `jbd2` or `xfsaild`).",
+		Thresholds: []string{
+			"$\\ge 2$ processes sleeping in `jbd2_log_wait_commit`, `vfs_fsync`, `xfs_log_reserve`, or `sync_buffer`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Group commits, adjust commit intervals, or place WAL / journal files on dedicated NVMe storage.",
+	},
+	"CONT_PAGECACHE_POLLUTION_STREAM": {
+		Description: "A bulk sequential I/O process streams data through buffered I/O, evicting the host's active application working set.",
+		Thresholds: []string{
+			"Single process with $\\ge 50\\text{MB/s}$ I/O AND `WorkingsetRefaultFileDelta >= 1000`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Run large streaming tasks (rsync, tar, backups) with `nocache` or `posix_fadvise(POSIX_FADV_DONTNEED)`.",
+	},
+	"CONT_NET_SOFTNET_BACKLOG_DROPS": {
+		Description: "Incoming packet bursts overflow the per-CPU NIC driver backlog queue before reaching the network stack.",
+		Thresholds: []string{
+			"`SoftnetDroppedDelta > 0` OR `SoftnetTimeSqueezeDelta >= 50` in `/proc/net/softnet_stat`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Raise `sysctl -w net.core.netdev_max_backlog=10000` and `sysctl -w net.core.netdev_budget=600`.",
+	},
+	"CONT_TCP_RETRANSMIT_STORM": {
+		Description: "High network packet loss is triggering TCP congestion window collapse and exponential retransmission delays.",
+		Thresholds: []string{
+			"`RetransSegsDelta / OutSegsDelta >= 0.05` (5% loss rate) with $\\ge 500$ outbound segments in `/proc/net/snmp`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Inspect network switch drops, check MTU consistency, or enable BBR congestion control.",
+	},
+	"CONT_TCP_ZEROWINDOW_STALL": {
+		Description: "TCP senders are stalled because downstream consumer processes have filled their socket receive buffers.",
+		Thresholds: []string{
+			"`TCPWinProbeDelta >= 5` OR `TCPZeroWindowDropDelta > 0` OR process in `sk_stream_wait_memory` wchan.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Increase consumer read concurrency, enlarge `net.ipv4.tcp_rmem`, or profile slow downstream services.",
+	},
+	"CONT_COREDUMP_BURST_STORM": {
+		Description: "Crashlooping processes continuously spawn core dump helpers (`systemd-coredump`, `apport`), burning CPU and disk.",
+		Thresholds: []string{
+			"Core dumper process active with $\\ge 10$ process fork creation events in `/proc/stat`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Stop crashlooping containers, temporarily disable dumps (`ulimit -c 0`), or fix the crashing binary.",
+	},
+	"CONT_UNIX_SOCKET_LOG_BLOCK": {
+		Description: "Applications are blocked in synchronous `sendto()` waiting for saturated Unix domain socket log buffers to drain.",
+		Thresholds: []string{
+			"$\\ge 2$ processes sleeping in `unix_wait_for_peer`, `unix_stream_sendmsg`, or `unix_dgram_sendmsg`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Reduce application logging verbosity, use async log buffers, or raise `RateLimitBurst` in `/etc/systemd/journald.conf`.",
+	},
+	"CONT_UDP_BUFFER_OVERRUN": {
+		Description: "UDP socket receive or send buffers are overflowing, causing silent packet drops for UDP services (DNS/VoIP/StatsD).",
+		Thresholds: []string{
+			"`UDPRcvbufErrorsDelta > 0` OR `UDPSndbufErrorsDelta > 0` in `/proc/net/snmp`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.core.rmem_max=16777216` and raise application `SO_RCVBUF` socket buffers.",
+	},
+	"CONT_TCP_LISTEN_OVERFLOW_STALL": {
+		Description: "Application listen backlog queue is saturated, causing incoming connection drops and connection resets (`TCPAbortOnData`).",
+		Thresholds: []string{
+			"`ListenOverflowsDelta > 0` AND `TCPAbortOnDataDelta > 0` in `/proc/net/netstat`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.core.somaxconn=8192` and scale up server worker thread pool concurrency.",
+	},
+	"CONT_HUGETLB_POOL_EXHAUSTION": {
+		Description: "Dedicated explicit HugePages pool (used by PostgreSQL, DPDK, Oracle) is 100% exhausted with 0 free pages.",
+		Thresholds: []string{
+			"`HugePages_Total > 0` AND `HugePages_Free == 0` AND `HugePages_Rsvd > 0` in `/proc/meminfo`.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w vm.nr_hugepages=<N>` or downsize database shared buffer allocations.",
+	},
+	"CONT_PTRACE_TRACER_ATTACH": {
+		Description: "An interactive debugger or profiler (`strace`, `gdb`, `lldb`) attached via `ptrace()` is intercepting every syscall and causing 10x-50x latency slowdown.",
+		Thresholds: []string{
+			"Process with `CPUPercent >= 20.0%` has `TracerPid > 0` in `/proc/[pid]/status`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Detach interactive debugger or use non-blocking sampling profilers (`perf` / eBPF).",
+	},
+	"CONT_SYSV_SEMAPHORE_LIMIT": {
+		Description: "System V IPC semaphore table capacity (`SEMMNS` / `SEMMNI`) is saturated, blocking database connection pooling and process spawning.",
+		Thresholds: []string{
+			"`AllocatedSemaphores >= 90%` of `SEMMNS` or `AllocatedSemSets >= 90%` of `SEMMNI` in `/proc/sysvipc/sem` and `/proc/sys/kernel/sem`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w kernel.sem=\"50100 64128000 50100 1280\"` or clean stale semaphore sets with `ipcrm -s <semid>`.",
+	},
+	"CONT_TCP_TIMEWAIT_BUCKET_OVERFLOW": {
+		Description: "Kernel TCP TIME_WAIT bucket table is saturated, causing new incoming connections to be dropped.",
+		Thresholds: []string{
+			"`TCPTimeWaitOverflowDelta > 0` in `/proc/net/netstat` OR `TCPTimeWait >= 85%` of `tcp_max_tw_buckets`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_max_tw_buckets=2000000` and enable TIME_WAIT reuse: `sysctl -w net.ipv4.tcp_tw_reuse=1`.",
+	},
+	"CONT_CGROUP_IO_THROTTLE_STALL": {
+		Description: "Containerized processes are heavily throttled by Cgroup v2 `io.max` IOPS/bandwidth limits under high PSI I/O pressure.",
+		Thresholds: []string{
+			"Process with non-root `CgroupPath` blocked in `io_schedule` or `bdi_writeback_workfn` while `PSI.IO.Full.Avg10 >= 10.0%`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`docker update --io-max-bandwidth /dev/sda:500M` or relax container cgroup `io.max` limits.",
+	},
+	"CONT_AUDITD_BACKLOG_WAIT_STALL": {
+		Description: "Linux kernel audit subsystem queue is saturated, forcing processes into synchronous kernel sleep during syscalls.",
+		Thresholds: []string{
+			"$\\ge 2$ processes with `wchan` in `kauditd_wait`, `audit_log_start`, or `audit_receive` AND `ProcsBlocked >= 2` or D-state.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`auditctl -b 8192 -f 0` or disable auditing (`auditctl -e 0`).",
+	},
+	"CONT_TCP_SNDBUF_EXHAUSTION": {
+		Description: "Outbound TCP socket send buffer is exhausted, blocking network send syscalls and stalling event loops.",
+		Thresholds: []string{
+			"Process in `sk_stream_wait_memory` or `tcp_sendmsg_locked` with `TCPSlowStartRetransDelta > 0` or `TCPMemoryPressuresDelta > 0`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_wmem=\"4096 65536 16777216\"` and enable TCP window scaling: `sysctl -w net.ipv4.tcp_window_scaling=1`.",
+	},
+	"CONT_XFS_AIL_PUSH_STALL": {
+		Description: "High metadata churn on XFS fills the journal log, forcing transactions to stall while `xfsaild` pushes dirty items.",
+		Thresholds: []string{
+			"$\\ge 2$ processes in `xfs_log_reserve`, `xfs_trans_reserve`, or `xfsaild` with PSI IO Some $\\ge 15.0\\%$ or `ProcsBlocked >= 2`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`mount -o remount,logbufs=8,logbsize=256k <mount>` or expand log size.",
+	},
+	"CONT_DM_QUEUE_CONGESTION": {
+		Description: "Virtual device-mapper queue (LVM / LUKS / dm-thin) is congested with high write latency and in-flight I/O requests.",
+		Thresholds: []string{
+			"`dm-*` block device with `UtilPercent >= 80.0%` AND `AvgWriteLatencyMS >= 50.0` with `IOsInProgress >= 5` or active crypto workers.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`echo 1024 > /sys/block/<dev>/queue/nr_requests && echo none > /sys/block/<dev>/queue/scheduler`.",
+	},
+	"CONT_TCP_SYN_COOKIE_FLOOD_STALL": {
+		Description: "Saturated half-open SYN connection queue forcing the kernel to generate cryptographic SYN cookies and disable TCP window scaling.",
+		Thresholds: []string{
+			"`SyncookiesSentDelta >= 50` OR `TCPReqQFullDoCookiesDelta >= 50` with `SyncookiesFailedDelta > 0` or `OutSegsDelta >= 500`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_max_syn_backlog=65535 && sysctl -w net.core.somaxconn=65535`.",
+	},
+	"CONT_EPOLL_WAKEUP_CONTENTION": {
+		Description: "Multi-worker processes sharing listening sockets or event loops suffering thundering herd wakeup storms in `epoll_wait`.",
+		Thresholds: []string{
+			"$\\ge 8$ processes in `do_epoll_wait` / `ep_poll` with `ContextSwitchesDelta >= 50000` and `SystemPercent >= 15.0%`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Configure listeners with `SO_REUSEPORT` or use `EPOLLEXCLUSIVE` in epoll event loops.",
+	},
+	"CONT_AIO_EVENT_LIMIT_SATURATION": {
+		Description: "Kernel asynchronous I/O event table is nearing capacity (`aio-nr / aio-max-nr >= 90%`), risking `io_setup`/`io_submit` `EAGAIN` stalls.",
+		Thresholds: []string{
+			"`AIONR / AIOMaxNR >= 0.90` and process in `io_submit`/`io_getevents`/`wait_on_page_bit` or D-state or `ProcsBlocked >= 2`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w fs.aio-max-nr=1048576`.",
+	},
+	"CONT_KSWAPD_CPU_SPIN": {
+		Description: "Background memory reclamation daemon `kswapd` is pegged at high CPU failing to restore memory watermarks, causing direct reclaim stalls.",
+		Thresholds: []string{
+			"Process `kswapd*` CPU $\\ge 40.0\\%$ with direct reclaim scans or direct allocation stalls.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`sysctl -w vm.watermark_scale_factor=200 && sysctl -w vm.vfs_cache_pressure=50`.",
+	},
+	"CONT_MD_RAID_RESYNC_STALL": {
+		Description: "Linux Software RAID (`mdadm` / `/dev/md*`) background resync or rebuild is saturating disk channels.",
+		Thresholds: []string{
+			"`/proc/mdstat` has active `resync`, `recovery`, `check`, or `repair` with disk latency $\\ge 50\\text{ms}$ or high in-flight I/O.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w dev.raid.speed_limit_max=20000 && sysctl -w dev.raid.speed_limit_min=1000`.",
+	},
+	"CONT_NET_OUT_OF_ORDER_STALL": {
+		Description: "Out-of-order TCP packets flood socket reassembly queues, triggering receive buffer collapses and throughput degradation.",
+		Thresholds: []string{
+			"`TCPOFOQueueDelta >= 500` and `TCPRcvCollapsedDelta > 0` or `TCPOFODropDelta > 0` or retransmit ratio $\\ge 3\\%$.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_reordering=6 && sysctl -w net.ipv4.tcp_rmem=\"4096 131072 16777216\"`.",
+	},
+	"CONT_POSIX_RTSIG_QUEUE_SATURATION": {
+		Description: "Process real-time signal queue (`SigQ`) is nearing capacity ($\\ge 85\\%$), risking signal drop or notification failures.",
+		Thresholds: []string{
+			"`SigQ` queued $\\ge 85\\%$ of limit with $\\ge 16$ threads or CPU $\\ge 20\\%$ or D-state.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w kernel.rtsig-max=65536`.",
+	},
+	"CONT_UDP_SNDBUF_EXHAUSTION": {
+		Description: "Outbound UDP transmit buffers overflowed (`Udp: SndbufErrors`), causing syslog, StatsD, DNS, or streaming packet loss.",
+		Thresholds: []string{
+			"`UDPSndbufErrorsDelta >= 25` with OutSegs $\\ge 200$ or receive buffer errors.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w net.core.wmem_max=16777216 && sysctl -w net.core.wmem_default=262144`.",
+	},
+	"CONT_CGROUP_V1_CPU_SHARES_STARVATION": {
+		Description: "Container cgroup has relative weight (`cpu.shares`) configured disproportionately low ($\\le 64$ vs 1024), causing severe CPU starvation under host CPU contention.",
+		Thresholds: []string{
+			"Cgroup `CPUShares <= 64` with host CPU Busy $\\ge 70\\%$ and process inside container.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`docker update --cpu-shares=1024 <container>` or `echo 1024 > /sys/fs/cgroup/cpu<path>/cpu.shares`.",
+	},
+	"CONT_HUGEPAGE_LEAK_NO_REUSE": {
+		Description: "Explicit HugePages (`vm.nr_hugepages`) allocated and reserved occupy significant RAM without being actively used after process crash.",
+		Thresholds: []string{
+			"`HugePages_Total > 0`, `HugePages_Rsvd > 0` locking $\\ge 25\\%$ of physical RAM while host `MemAvailable < 20%`.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "Remove unattached IPC segments: `ipcrm -m <shmid>` or release HugePages: `sysctl -w vm.nr_hugepages=0`.",
+	},
+	"CONT_NET_TCP_ABORT_ON_CLOSE": {
+		Description: "Application closed TCP sockets while unread data remained in receive buffers, triggering kernel TCP RST packet generation (`TCPAbortOnClose`).",
+		Thresholds: []string{
+			"`TCPAbortOnCloseDelta >= 20` with OutSegs $\\ge 200$.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Drain socket receive buffers before closing or adjust request framing and HTTP keep-alive timeouts.",
+	},
+	"CONT_SCHED_YIELD_SPIN_CHURN": {
+		Description: "Process worker threads repeatedly execute `sched_yield()` syscall in a tight loop instead of parking on futexes, generating massive voluntary context switches and CPU load.",
+		Thresholds: []string{
+			"Process voluntary context switches $\\ge 15\\text{k/s}$ with CPU $\\ge 35\\%$.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Replace busy-spin yielding with proper futex/eventfd mutex parking.",
+	},
+	"CONT_NET_TCP_COLLAPSE_PRUNE": {
+		Description: "Kernel TCP receive queues collapsed to reclaim socket memory, causing packet pruning and retransmissions.",
+		Thresholds: []string{
+			"`TCPRcvCollapsedDelta >= 20` with `TCPAbortOnMemoryDelta > 0` or `RetransSegsDelta >= 50`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_rmem=\"4096 87380 16777216\" && sysctl -w net.ipv4.tcp_adv_win_scale=2`.",
+	},
+	"CONT_NET_TCP_MEMORY_ALLOC_FAIL": {
+		Description: "Kernel aborted TCP connections or rejected packet allocations due to global `tcp_mem` socket page exhaustion.",
+		Thresholds: []string{
+			"`TCPAbortOnMemoryDelta >= 5` with zero window drops or TCP memory pressure.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_mem=\"786432 1048576 1572864\"`.",
+	},
+	"CONT_NET_TCP_ZERO_WINDOW_DROP": {
+		Description: "Receiving endpoint or local host advertised a zero TCP receive window, stalling outbound transmission.",
+		Thresholds: []string{
+			"`TCPZeroWindowDropDelta >= 10` or window probe with outbound segments.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Ensure receiving application drains socket buffers quickly or enable TCP window scaling: `sysctl -w net.ipv4.tcp_window_scaling=1`.",
+	},
+	"CONT_FUTEX_PI_DEADLOCK_STALL": {
+		Description: "Thread blocked in Priority-Inheritance / robust futex lock (`futex_lock_pi` / `rt_mutex_slowlock`) due to lock owner death or priority inversion.",
+		Thresholds: []string{
+			"Process in `futex_lock_pi` or `rt_mutex_slowlock` wchan with 0 CPU.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Inspect process mutex stacks with gdb/pprof or restart stalled service.",
+	},
+	"CONT_NET_ARP_TABLE_TRASH": {
+		Description: "ARP/NDISC neighbor table is near capacity, risking neighbor discovery failures and dropped outbound packets.",
+		Thresholds: []string{
+			"Active ARP entries $\\ge 85\\%$ of `gc_thresh3`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.neigh.default.gc_thresh3=8192 && sysctl -w net.ipv4.neigh.default.gc_thresh2=4096`.",
+	},
+	"CONT_DIRTY_PAGES_DIRECT_SYNC_STALL": {
+		Description: "Unwritten dirty page cache accumulation forced processes into synchronous blocking page writeback (`sync_inodes` / `wait_on_page_writeback`).",
+		Thresholds: []string{
+			"Process in `sync_inodes` / `wait_on_page_writeback` in D-state or `NRDirtyDelta >= 2000`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w vm.dirty_background_ratio=5 && sysctl -w vm.dirty_ratio=15`.",
+	},
+	"CONT_NFS_RPC_SLOT_TABLE_SATURATION": {
+		Description: "NFS client RPC transport slots exhausted (`sunrpc.tcp_slot_table_entries`) or remote NFS server unresponsive, blocking I/O calls.",
+		Thresholds: []string{
+			"Process in `nfs_wait_client` or `rpc_wait_bit_killable` in D-state.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w sunrpc.tcp_slot_table_entries=128` or inspect remote NFS server health.",
+	},
+	"CONT_UNIX_SOCKET_BACKLOG_OVERFLOW": {
+		Description: "Local UNIX domain socket buffer queues filled to capacity (`unix_stream_sendmsg`), blocking client threads.",
+		Thresholds: []string{
+			"Process in `unix_stream_sendmsg` or `unix_wait_for_peer` in D/S state with 0 CPU.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Ensure receiving daemon (syslog, systemd-journald, database IPC) drains socket queues.",
+	},
+	"CONT_VFS_INODE_LOCK_CONTENTION": {
+		Description: "Multiple processes serializing on directory/file inode mutex locks during parallel file writeback.",
+		Thresholds: []string{
+			"Process in `inode_lock_shared`, `inode_lock`, or `ext4_file_write_iter` in D-state.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Shard file writes across multiple files/directories or use O_DIRECT.",
+	},
+	"CONT_KERNEL_LOCKD_BLOCKED": {
+		Description: "Process blocked waiting for POSIX file lock acquisition (fcntl / flock) held by another process.",
+		Thresholds: []string{
+			"Process in `fcntl_setlk`, `locks_lock_inode_wait`, or `flock_lock_inode` with 0 CPU.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Inspect locks via `/proc/locks` or `lslocks` to identify blocker process.",
+	},
+	"CONT_SCHED_AUTOGROUP_STARVATION": {
+		Description: "Kernel CFS autogroup scheduler grouped session tasks into a single autogroup, starving multi-threaded server tasks launched in that session.",
+		Thresholds: []string{
+			"Process with $\\ge 16$ threads at low CPU under busy runqueue.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`sysctl -w kernel.sched_autogroup_enabled=0` or move tasks to a systemd service unit.",
+	},
+	"CONT_FTRACE_RING_BUFFER_STALL": {
+		Description: "Active ftrace / tracepoint event recording saturated trace ring buffers, stalling traced syscalls on buffer locks.",
+		Thresholds: []string{
+			"Process blocked in `tracing_wait_pipe` or `ring_buffer_wait` wchan with high system CPU.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Disable active tracing: `echo 0 > /sys/kernel/debug/tracing/tracing_on` or enlarge ring buffer.",
+	},
+	"CONT_NET_DEV_GRO_CELL_DROP": {
+		Description: "Generic Receive Offload cell buffer overflow in kernel softnet layer, dropping incoming packets.",
+		Thresholds: []string{
+			"`SoftnetDroppedDelta >= 20` AND `SoftnetTimeSqueezeDelta >= 20`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.core.netdev_budget=600 && sysctl -w net.core.netdev_budget_usecs=4000`.",
+	},
+	"CONT_MEM_COMPACT_MIGRATION_FAIL_RATE": {
+		Description: "High rate of page migration failures during memory compaction, wasting CPU without creating contiguous 2MB blocks.",
+		Thresholds: []string{
+			"`CompactStallDelta >= 50` AND `CompactFailDelta >= 25` ($\\ge 50\\%$ failure rate).",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo 1 > /proc/sys/vm/compact_memory` or `sysctl -w vm.compact_unevictable_allowed=0`.",
+	},
+	"CONT_NET_TCP_FASTOPEN_FAIL": {
+		Description: "TCP Fast Open (TFO) active/passive handshake attempts are rejected or dropping cookies.",
+		Thresholds: []string{
+			"`TCPFastOpenActiveFailDelta + TCPFastOpenPassiveFailDelta >= 5`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_fastopen=3` or verify middlebox compatibility.",
+	},
+	"CONT_NET_TCP_SYN_ACK_RETRANS_STALL": {
+		Description: "High SYN or SYN-ACK retransmissions during connection establishment.",
+		Thresholds: []string{
+			"`TCPSynRetransDelta >= 20`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Check network routing, path MTU, or remote firewall drops.",
+	},
+	"CONT_NET_SOCKET_RECV_STALL": {
+		Description: "Process is stalled in uninterruptible sleep ('D' state) waiting on socket ingress buffers.",
+		Thresholds: []string{
+			"Process in `sk_wait_data` / `tcp_recvmsg` in D-state.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Inspect network bandwidth, packet loss, or sender throughput.",
+	},
+	"CONT_STORAGE_BLK_THROTTLE_STALL": {
+		Description: "Process is queued in cgroup block I/O throttling limits (`blk_throtl`).",
+		Thresholds: []string{
+			"Process in `blk_throtl_dispatch_work_fn` / `throtl_pending_timer_fn` in D-state.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Increase container block I/O throttle limits: `docker update --device-read-bps`.",
+	},
+	"CONT_NET_TCP_DEFER_ACCEPT_TIMEOUT": {
+		Description: "TCP listener connections configured with TCP_DEFER_ACCEPT aborted before client sent data.",
+		Thresholds: []string{
+			"`TCPDeferAcceptDropDelta >= 10`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Tune application defer accept timeout or inspect client connection keep-alive behavior.",
+	},
+	"CONT_MEMCG_RECLAIM_DIRECT_STALL": {
+		Description: "Process stalled performing synchronous memory direct reclaim to satisfy cgroup limits.",
+		Thresholds: []string{
+			"Process in `try_to_free_mem_cgroup_pages` / `mem_cgroup_reclaim` in D-state.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "Increase container memory limit: `docker update --memory <size>` or raise cgroup memory.high.",
+	},
+	"CONT_XFS_ALLOC_BTREE_CONTENTION": {
+		Description: "Heavy allocation group btree lock contention on high-concurrency XFS filesystems.",
+		Thresholds: []string{
+			"Process in `xfs_alloc_fixup_trees` / `xfs_btree_lookup` in D-state.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Mount XFS with `allocsize=64m` or distribute concurrent file creations across separate directories.",
+	},
+	"CONT_SCHED_MIGRATION_COST_OVERHEAD": {
+		Description: "Scheduler task migration penalty is set to 0 ns, causing tasks to bounce across CPU cores and thrash caches.",
+		Thresholds: []string{
+			"`sched_migration_cost_ns == 0` AND context switches $\\ge 50\\text{k/s}$.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Increase scheduler migration cost: `sysctl -w kernel.sched_migration_cost_ns=500000`.",
+	},
+	"CONT_NET_TCP_ZERO_WINDOW_ADVERT": {
+		Description: "Host advertised zero receive window to remote peers, freezing incoming data streams.",
+		Thresholds: []string{
+			"`TCPWinProbeDelta >= 20` OR `TCPZeroWindowDropDelta >= 10`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Increase TCP window scaling: `sysctl -w net.ipv4.tcp_adv_win_scale=2` and enlarge application read buffers.",
+	},
+	"CONT_PSI_SOME_IO_PRESSURE_SPIKE": {
+		Description: "Linux Pressure Stall Information (PSI) recorded elevated task stalls waiting on storage I/O.",
+		Thresholds: []string{
+			"PSI I/O `some` avg10 $\\ge 25.0\\%$.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Check disk I/O queue depths, balance disk writeback buffers, or migrate I/O to NVMe.",
+	},
+	"CONT_PSI_SOME_CPU_PRESSURE_SPIKE": {
+		Description: "Linux PSI recorded elevated runnable task delays stalled on CPU runqueues.",
+		Thresholds: []string{
+			"PSI CPU `some` avg10 $\\ge 30.0\\%$.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Renice background batch tasks, pin critical latency workloads, or scale CPU allocation.",
+	},
+	"CONT_PSI_FULL_MEMORY_PRESSURE_SPIKE": {
+		Description: "Linux PSI recorded critical system-wide lockup during direct memory paging and allocation.",
+		Thresholds: []string{
+			"PSI Memory `full` avg10 $\\ge 15.0\\%$.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "Provision additional physical RAM, tune zram/zswap, or restrict memory limits on hungry containers.",
+	},
+	"CONT_PIPE_READ_BURST_BLOCK": {
+		Description: "Process is blocked in uninterruptible sleep on pipe read operations waiting for upstream producers.",
+		Thresholds: []string{
+			"Process in `pipe_read` / `fifo_read` in D-state.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Enlarge pipe buffer capacity via `fcntl(F_SETPIPE_SZ)` or diagnose upstream pipe producer stalls.",
+	},
+	"CONT_TCP_CLOSE_WAIT_LEAK": {
+		Description: "Kernel socket table contains excessive sockets stuck in CLOSE_WAIT state. The application process failed to close socket file descriptors, leaking kernel memory and handles.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Inspect application connection pool and HTTP client response body cleanup (ensure body.Close() is invoked). Check lsof or /proc/[pid]/fd to isolate the leaking PID.",
+	},
+	"CONT_SUSTAINED_LOAD_SATURATION": {
+		Description: "System load averages (1m and 5m) are sustained significantly higher than available CPU core capacity.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Scale out compute instances, increase CPU allocations, or audit long-running thread pools for excessive concurrency.",
+	},
+	"CONT_RUNAWAY_CPU_PROCESS": {
+		Description: "A runaway process is consuming excessive CPU on a core, starving other workloads of compute cycles.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Lower CPU scheduling priority with renice or send graceful stop signal: kill -TERM <PID>.",
+	},
+	"CONT_PROCESS_SWAP_PINNED": {
+		Description: "Process has excessive memory swapped out to disk backing store under active system memory pressure.",
+		Thresholds: []string{
+			"Process SmapsRollup.Swap > 500MB (512,000 KB)",
+			"System MemAvailable < 20% MemTotal OR pswpin delta > 0",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/smaps_rollup",
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "Reduce memory usage of the affected process or increase physical system RAM.",
+	},
+	"CONT_DENTRY_CACHE_EXPLOSION": {
+		Description: "Kernel dentry cache has grown excessively (> 2,000,000 objects) consuming kernel slab memory under system memory pressure.",
+		Thresholds: []string{
+			"DentryCacheActive > 2,000,000 objects",
+			"MemAvailable < 20.0% of MemTotal",
+		},
+		KernelSources: []string{
+			"/proc/slabinfo",
+			"/proc/meminfo",
+		},
+		Remediation: "echo 2 > /proc/sys/vm/drop_caches (requires root) to release dentry/inode caches",
+	},
 }
 
 // RuleDStatePileup detects tasks stuck in uninterruptible sleep waiting on block/NFS I/O.
 type RuleDStatePileup struct{ noSuppression }
 
-func (r *RuleDStatePileup) ID() string           { return "CONT_DSTATE_PILEUP" }
+func (r *RuleDStatePileup) ID() string { return "CONT_DSTATE_PILEUP" }
+func (r *RuleDStatePileup) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleDStatePileup) Tier() int            { return 2 }
 func (r *RuleDStatePileup) IsPIDDependent() bool { return true }
 
@@ -172,7 +1151,10 @@ func (r *RuleDStatePileup) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 // RuleSwapThrashing detects kernel direct page scanning and allocation stalls.
 type RuleSwapThrashing struct{ noSuppression }
 
-func (r *RuleSwapThrashing) ID() string           { return "CONT_SWAP_THRASHING" }
+func (r *RuleSwapThrashing) ID() string { return "CONT_SWAP_THRASHING" }
+func (r *RuleSwapThrashing) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSwapThrashing) Tier() int            { return 2 }
 func (r *RuleSwapThrashing) IsPIDDependent() bool { return false }
 
@@ -223,7 +1205,10 @@ func (r *RuleSwapThrashing) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleCgroupThrottled detects CPU quota wall throttling inside containers or systemd slices.
 type RuleCgroupThrottled struct{ noSuppression }
 
-func (r *RuleCgroupThrottled) ID() string           { return "CONT_CGROUP_THROTTLED" }
+func (r *RuleCgroupThrottled) ID() string { return "CONT_CGROUP_THROTTLED" }
+func (r *RuleCgroupThrottled) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleCgroupThrottled) Tier() int            { return 2 }
 func (r *RuleCgroupThrottled) IsPIDDependent() bool { return true }
 
@@ -282,7 +1267,10 @@ func (r *RuleCgroupThrottled) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 // RuleFDExhaustion detects processes approaching their file descriptor limits.
 type RuleFDExhaustion struct{ noSuppression }
 
-func (r *RuleFDExhaustion) ID() string           { return "CONT_FD_EXHAUSTION" }
+func (r *RuleFDExhaustion) ID() string { return "CONT_FD_EXHAUSTION" }
+func (r *RuleFDExhaustion) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleFDExhaustion) Tier() int            { return 2 }
 func (r *RuleFDExhaustion) IsPIDDependent() bool { return true }
 
@@ -328,7 +1316,10 @@ func (r *RuleFDExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 // RuleSoftIRQUnbalance detects a single core saturated by network softirqs while other cores are idle.
 type RuleSoftIRQUnbalance struct{ noSuppression }
 
-func (r *RuleSoftIRQUnbalance) ID() string           { return "CONT_SOFTIRQ_UNBALANCE" }
+func (r *RuleSoftIRQUnbalance) ID() string { return "CONT_SOFTIRQ_UNBALANCE" }
+func (r *RuleSoftIRQUnbalance) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSoftIRQUnbalance) Tier() int            { return 2 }
 func (r *RuleSoftIRQUnbalance) IsPIDDependent() bool { return false }
 
@@ -376,11 +1367,14 @@ func (r *RuleSoftIRQUnbalance) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleTCPListenDrops detects dropped or overflowing TCP incoming connection queues.
 type RuleTCPListenDrops struct{}
 
-func (r *RuleTCPListenDrops) ID() string           { return "CONT_TCP_LISTEN_DROPS" }
+func (r *RuleTCPListenDrops) ID() string { return "CONT_TCP_LISTEN_DROPS" }
+func (r *RuleTCPListenDrops) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPListenDrops) Tier() int            { return 2 }
 func (r *RuleTCPListenDrops) IsPIDDependent() bool { return false }
 func (r *RuleTCPListenDrops) Suppresses() []string {
-	return []string{"CONT_TCP_LISTEN_OVERFLOW_STALL", "CONT_TCP_SYNQ_OVERFLOW"}
+	return []string{"CONT_TCP_LISTEN_OVERFLOW_STALL", "CONT_TCP_SYN_QUEUE_OVERFLOW"}
 }
 
 func (r *RuleTCPListenDrops) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
@@ -416,7 +1410,10 @@ func (r *RuleTCPListenDrops) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis,
 // RulePIDExhaustion detects PID ceiling saturation risking fork/thread creation failures.
 type RulePIDExhaustion struct{ noSuppression }
 
-func (r *RulePIDExhaustion) ID() string           { return "CONT_PID_EXHAUSTION" }
+func (r *RulePIDExhaustion) ID() string { return "CONT_PID_EXHAUSTION" }
+func (r *RulePIDExhaustion) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePIDExhaustion) Tier() int            { return 2 }
 func (r *RulePIDExhaustion) IsPIDDependent() bool { return true }
 
@@ -457,7 +1454,10 @@ func (r *RulePIDExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleTimeWaitPortExhaustion detects outbound connect failures due to TIME_WAIT ephemeral port flood.
 type RuleTimeWaitPortExhaustion struct{ noSuppression }
 
-func (r *RuleTimeWaitPortExhaustion) ID() string           { return "CONT_TIMEWAIT_PORT_EXHAUSTION" }
+func (r *RuleTimeWaitPortExhaustion) ID() string { return "CONT_TIMEWAIT_PORT_EXHAUSTION" }
+func (r *RuleTimeWaitPortExhaustion) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTimeWaitPortExhaustion) Tier() int            { return 2 }
 func (r *RuleTimeWaitPortExhaustion) IsPIDDependent() bool { return false }
 
@@ -502,7 +1502,10 @@ func (r *RuleTimeWaitPortExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleVCPUStealTime detects hypervisor CPU oversubscription and noisy neighbor cycle theft.
 type RuleVCPUStealTime struct{ noSuppression }
 
-func (r *RuleVCPUStealTime) ID() string           { return "CONT_VCPU_STEAL_TIME" }
+func (r *RuleVCPUStealTime) ID() string { return "CONT_VCPU_STEAL_TIME" }
+func (r *RuleVCPUStealTime) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleVCPUStealTime) Tier() int            { return 2 }
 func (r *RuleVCPUStealTime) IsPIDDependent() bool { return false }
 
@@ -548,7 +1551,10 @@ func (r *RuleVCPUStealTime) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleBalloonMemoryOvercommit detects hypervisor memory reclamation and balloon driver inflation.
 type RuleBalloonMemoryOvercommit struct{ noSuppression }
 
-func (r *RuleBalloonMemoryOvercommit) ID() string           { return "CONT_BALLOON_OVERCOMMIT" }
+func (r *RuleBalloonMemoryOvercommit) ID() string { return "CONT_BALLOON_OVERCOMMIT" }
+func (r *RuleBalloonMemoryOvercommit) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleBalloonMemoryOvercommit) Tier() int            { return 2 }
 func (r *RuleBalloonMemoryOvercommit) IsPIDDependent() bool { return false }
 
@@ -594,7 +1600,10 @@ func (r *RuleBalloonMemoryOvercommit) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleConntrackExhaustion detects Netfilter connection tracking table saturation.
 type RuleConntrackExhaustion struct{ noSuppression }
 
-func (r *RuleConntrackExhaustion) ID() string           { return "CONT_CONNTRACK_EXHAUSTION" }
+func (r *RuleConntrackExhaustion) ID() string { return "CONT_CONNTRACK_EXHAUSTION" }
+func (r *RuleConntrackExhaustion) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleConntrackExhaustion) Tier() int            { return 2 }
 func (r *RuleConntrackExhaustion) IsPIDDependent() bool { return false }
 
@@ -630,7 +1639,10 @@ func (r *RuleConntrackExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleARPNeighborTableOverflow detects ARP / Neighbor cache table saturation in large subnets or Kubernetes nodes.
 type RuleARPNeighborTableOverflow struct{ noSuppression }
 
-func (r *RuleARPNeighborTableOverflow) ID() string           { return "CONT_ARP_NEIGHBOR_OVERFLOW" }
+func (r *RuleARPNeighborTableOverflow) ID() string { return "CONT_ARP_NEIGHBOR_OVERFLOW" }
+func (r *RuleARPNeighborTableOverflow) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleARPNeighborTableOverflow) Tier() int            { return 2 }
 func (r *RuleARPNeighborTableOverflow) IsPIDDependent() bool { return false }
 
@@ -666,7 +1678,10 @@ func (r *RuleARPNeighborTableOverflow) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleTCPSYNQueueOverflow detects half-open connection SYN backlog queue floods.
 type RuleTCPSYNQueueOverflow struct{ noSuppression }
 
-func (r *RuleTCPSYNQueueOverflow) ID() string           { return "CONT_TCP_SYN_QUEUE_OVERFLOW" }
+func (r *RuleTCPSYNQueueOverflow) ID() string { return "CONT_TCP_SYN_QUEUE_OVERFLOW" }
+func (r *RuleTCPSYNQueueOverflow) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPSYNQueueOverflow) Tier() int            { return 2 }
 func (r *RuleTCPSYNQueueOverflow) IsPIDDependent() bool { return false }
 
@@ -705,7 +1720,10 @@ func (r *RuleTCPSYNQueueOverflow) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleBlockHardwareTagStarvation detects storage controller blk-mq submission tag queue exhaustion.
 type RuleBlockHardwareTagStarvation struct{ noSuppression }
 
-func (r *RuleBlockHardwareTagStarvation) ID() string           { return "CONT_BLK_MQ_TAG_STARVATION" }
+func (r *RuleBlockHardwareTagStarvation) ID() string { return "CONT_BLK_MQ_TAG_STARVATION" }
+func (r *RuleBlockHardwareTagStarvation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleBlockHardwareTagStarvation) Tier() int            { return 2 }
 func (r *RuleBlockHardwareTagStarvation) IsPIDDependent() bool { return true }
 
@@ -748,7 +1766,10 @@ func (r *RuleBlockHardwareTagStarvation) Evaluate(diff *collector.SnapshotDiff) 
 // RuleSchedRunqueueStarvation detects high CPU scheduler runqueue dispatch latencies.
 type RuleSchedRunqueueStarvation struct{ noSuppression }
 
-func (r *RuleSchedRunqueueStarvation) ID() string           { return "CONT_SCHED_RUNQUEUE_STARVATION" }
+func (r *RuleSchedRunqueueStarvation) ID() string { return "CONT_SCHED_RUNQUEUE_STARVATION" }
+func (r *RuleSchedRunqueueStarvation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSchedRunqueueStarvation) Tier() int            { return 2 }
 func (r *RuleSchedRunqueueStarvation) IsPIDDependent() bool { return false }
 
@@ -784,7 +1805,10 @@ func (r *RuleSchedRunqueueStarvation) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleCgroupMemoryHighThrottle detects proactive page allocation delay injection in cgroup v2.
 type RuleCgroupMemoryHighThrottle struct{ noSuppression }
 
-func (r *RuleCgroupMemoryHighThrottle) ID() string           { return "CONT_CGROUP_MEM_HIGH_THROTTLE" }
+func (r *RuleCgroupMemoryHighThrottle) ID() string { return "CONT_CGROUP_MEM_HIGH_THROTTLE" }
+func (r *RuleCgroupMemoryHighThrottle) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleCgroupMemoryHighThrottle) Tier() int            { return 2 }
 func (r *RuleCgroupMemoryHighThrottle) IsPIDDependent() bool { return false }
 
@@ -818,7 +1842,10 @@ func (r *RuleCgroupMemoryHighThrottle) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleIOSchedulerQueueLatency detects I/O scheduler queueing delays before requests reach storage controllers.
 type RuleIOSchedulerQueueLatency struct{ noSuppression }
 
-func (r *RuleIOSchedulerQueueLatency) ID() string           { return "CONT_IO_QUEUE_LATENCY" }
+func (r *RuleIOSchedulerQueueLatency) ID() string { return "CONT_IO_QUEUE_LATENCY" }
+func (r *RuleIOSchedulerQueueLatency) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleIOSchedulerQueueLatency) Tier() int            { return 2 }
 func (r *RuleIOSchedulerQueueLatency) IsPIDDependent() bool { return false }
 
@@ -853,7 +1880,10 @@ func (r *RuleIOSchedulerQueueLatency) Evaluate(diff *collector.SnapshotDiff) (*D
 // RulePageTableLockContention detects mmap_lock / page table lock contention on multi-threaded runtimes.
 type RulePageTableLockContention struct{ noSuppression }
 
-func (r *RulePageTableLockContention) ID() string           { return "CONT_PAGE_TABLE_LOCK" }
+func (r *RulePageTableLockContention) ID() string { return "CONT_PAGE_TABLE_LOCK" }
+func (r *RulePageTableLockContention) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePageTableLockContention) Tier() int            { return 2 }
 func (r *RulePageTableLockContention) IsPIDDependent() bool { return true }
 
@@ -899,7 +1929,10 @@ func (r *RulePageTableLockContention) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleOrphanSocketLeak detects accumulation of unassociated orphan TCP sockets.
 type RuleOrphanSocketLeak struct{ noSuppression }
 
-func (r *RuleOrphanSocketLeak) ID() string           { return "CONT_ORPHAN_SOCKET_LEAK" }
+func (r *RuleOrphanSocketLeak) ID() string { return "CONT_ORPHAN_SOCKET_LEAK" }
+func (r *RuleOrphanSocketLeak) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleOrphanSocketLeak) Tier() int            { return 2 }
 func (r *RuleOrphanSocketLeak) IsPIDDependent() bool { return false }
 
@@ -936,7 +1969,10 @@ func (r *RuleOrphanSocketLeak) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleContextSwitchStorm detects extreme rates of CPU scheduler context switching causing kernel thrashing.
 type RuleContextSwitchStorm struct{ noSuppression }
 
-func (r *RuleContextSwitchStorm) ID() string           { return "CONT_CONTEXT_SWITCH_STORM" }
+func (r *RuleContextSwitchStorm) ID() string { return "CONT_CONTEXT_SWITCH_STORM" }
+func (r *RuleContextSwitchStorm) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleContextSwitchStorm) Tier() int            { return 2 }
 func (r *RuleContextSwitchStorm) IsPIDDependent() bool { return false }
 
@@ -972,7 +2008,10 @@ func (r *RuleContextSwitchStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleCPUGovernorPowersaveLag detects high CPU load while frequency is throttled by powersave governor.
 type RuleCPUGovernorPowersaveLag struct{ noSuppression }
 
-func (r *RuleCPUGovernorPowersaveLag) ID() string           { return "CONT_CPU_GOVERNOR_POWERSAVE_LAG" }
+func (r *RuleCPUGovernorPowersaveLag) ID() string { return "CONT_CPU_GOVERNOR_POWERSAVE_LAG" }
+func (r *RuleCPUGovernorPowersaveLag) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleCPUGovernorPowersaveLag) Tier() int            { return 2 }
 func (r *RuleCPUGovernorPowersaveLag) IsPIDDependent() bool { return false }
 
@@ -1013,7 +2052,10 @@ func (r *RuleCPUGovernorPowersaveLag) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleKsoftirqdSaturation detects CPU saturation of ksoftirqd threads handling deferred softirqs.
 type RuleKsoftirqdSaturation struct{ noSuppression }
 
-func (r *RuleKsoftirqdSaturation) ID() string           { return "CONT_KSOFTIRQD_SATURATION" }
+func (r *RuleKsoftirqdSaturation) ID() string { return "CONT_KSOFTIRQD_SATURATION" }
+func (r *RuleKsoftirqdSaturation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleKsoftirqdSaturation) Tier() int            { return 2 }
 func (r *RuleKsoftirqdSaturation) IsPIDDependent() bool { return true }
 
@@ -1055,7 +2097,10 @@ func (r *RuleKsoftirqdSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleWorkingsetRefaultThrashing detects continuous page cache eviction and synchronous re-reading.
 type RuleWorkingsetRefaultThrashing struct{ noSuppression }
 
-func (r *RuleWorkingsetRefaultThrashing) ID() string           { return "CONT_WORKINGSET_REFAULT_THRASHING" }
+func (r *RuleWorkingsetRefaultThrashing) ID() string { return "CONT_WORKINGSET_REFAULT_THRASHING" }
+func (r *RuleWorkingsetRefaultThrashing) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleWorkingsetRefaultThrashing) Tier() int            { return 2 }
 func (r *RuleWorkingsetRefaultThrashing) IsPIDDependent() bool { return false }
 
@@ -1095,7 +2140,10 @@ func (r *RuleWorkingsetRefaultThrashing) Evaluate(diff *collector.SnapshotDiff) 
 // RuleDirtyPageFlushSaturation detects applications blocked in synchronous dirty page flush.
 type RuleDirtyPageFlushSaturation struct{ noSuppression }
 
-func (r *RuleDirtyPageFlushSaturation) ID() string           { return "CONT_DIRTY_PAGE_FLUSH_SATURATION" }
+func (r *RuleDirtyPageFlushSaturation) ID() string { return "CONT_DIRTY_PAGE_FLUSH_SATURATION" }
+func (r *RuleDirtyPageFlushSaturation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleDirtyPageFlushSaturation) Tier() int            { return 2 }
 func (r *RuleDirtyPageFlushSaturation) IsPIDDependent() bool { return true }
 
@@ -1147,7 +2195,10 @@ func (r *RuleDirtyPageFlushSaturation) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleFsyncJournalStall detects multiple processes serialized waiting on filesystem journal commits.
 type RuleFsyncJournalStall struct{ noSuppression }
 
-func (r *RuleFsyncJournalStall) ID() string           { return "CONT_FSYNC_JOURNAL_STALL" }
+func (r *RuleFsyncJournalStall) ID() string { return "CONT_FSYNC_JOURNAL_STALL" }
+func (r *RuleFsyncJournalStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleFsyncJournalStall) Tier() int            { return 2 }
 func (r *RuleFsyncJournalStall) IsPIDDependent() bool { return true }
 
@@ -1192,7 +2243,10 @@ func (r *RuleFsyncJournalStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RulePageCachePollutionStream detects a bulk streaming I/O process evicting active working set cache.
 type RulePageCachePollutionStream struct{ noSuppression }
 
-func (r *RulePageCachePollutionStream) ID() string           { return "CONT_PAGECACHE_POLLUTION_STREAM" }
+func (r *RulePageCachePollutionStream) ID() string { return "CONT_PAGECACHE_POLLUTION_STREAM" }
+func (r *RulePageCachePollutionStream) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePageCachePollutionStream) Tier() int            { return 2 }
 func (r *RulePageCachePollutionStream) IsPIDDependent() bool { return true }
 
@@ -1237,7 +2291,10 @@ func (r *RulePageCachePollutionStream) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleSoftnetBacklogDrops detects NIC driver backlog drops or NAPI processing budget depletion.
 type RuleSoftnetBacklogDrops struct{ noSuppression }
 
-func (r *RuleSoftnetBacklogDrops) ID() string           { return "CONT_NET_SOFTNET_BACKLOG_DROPS" }
+func (r *RuleSoftnetBacklogDrops) ID() string { return "CONT_NET_SOFTNET_BACKLOG_DROPS" }
+func (r *RuleSoftnetBacklogDrops) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSoftnetBacklogDrops) Tier() int            { return 2 }
 func (r *RuleSoftnetBacklogDrops) IsPIDDependent() bool { return false }
 
@@ -1270,7 +2327,10 @@ func (r *RuleSoftnetBacklogDrops) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleTCPRetransmitStorm detects high TCP segment retransmission ratios indicating network loss.
 type RuleTCPRetransmitStorm struct{ noSuppression }
 
-func (r *RuleTCPRetransmitStorm) ID() string           { return "CONT_TCP_RETRANSMIT_STORM" }
+func (r *RuleTCPRetransmitStorm) ID() string { return "CONT_TCP_RETRANSMIT_STORM" }
+func (r *RuleTCPRetransmitStorm) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPRetransmitStorm) Tier() int            { return 2 }
 func (r *RuleTCPRetransmitStorm) IsPIDDependent() bool { return false }
 
@@ -1307,7 +2367,10 @@ func (r *RuleTCPRetransmitStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleTCPZeroWindowStall detects sender processes blocked because remote consumers have full socket buffers.
 type RuleTCPZeroWindowStall struct{ noSuppression }
 
-func (r *RuleTCPZeroWindowStall) ID() string           { return "CONT_TCP_ZEROWINDOW_STALL" }
+func (r *RuleTCPZeroWindowStall) ID() string { return "CONT_TCP_ZEROWINDOW_STALL" }
+func (r *RuleTCPZeroWindowStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPZeroWindowStall) Tier() int            { return 2 }
 func (r *RuleTCPZeroWindowStall) IsPIDDependent() bool { return true }
 
@@ -1354,7 +2417,10 @@ func (r *RuleTCPZeroWindowStall) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleCoredumpBurstStorm detects intense CPU/disk load generated by crashlooping processes dumping core.
 type RuleCoredumpBurstStorm struct{ noSuppression }
 
-func (r *RuleCoredumpBurstStorm) ID() string           { return "CONT_COREDUMP_BURST_STORM" }
+func (r *RuleCoredumpBurstStorm) ID() string { return "CONT_COREDUMP_BURST_STORM" }
+func (r *RuleCoredumpBurstStorm) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleCoredumpBurstStorm) Tier() int            { return 2 }
 func (r *RuleCoredumpBurstStorm) IsPIDDependent() bool { return true }
 
@@ -1396,7 +2462,10 @@ func (r *RuleCoredumpBurstStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleUnixSocketLogBlock detects multiple processes blocked writing to full Unix domain sockets.
 type RuleUnixSocketLogBlock struct{ noSuppression }
 
-func (r *RuleUnixSocketLogBlock) ID() string           { return "CONT_UNIX_SOCKET_LOG_BLOCK" }
+func (r *RuleUnixSocketLogBlock) ID() string { return "CONT_UNIX_SOCKET_LOG_BLOCK" }
+func (r *RuleUnixSocketLogBlock) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleUnixSocketLogBlock) Tier() int            { return 2 }
 func (r *RuleUnixSocketLogBlock) IsPIDDependent() bool { return true }
 
@@ -1440,7 +2509,10 @@ func (r *RuleUnixSocketLogBlock) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleUDPBufferOverrun detects packet loss on UDP services from socket receive/send queue overflows.
 type RuleUDPBufferOverrun struct{ noSuppression }
 
-func (r *RuleUDPBufferOverrun) ID() string           { return "CONT_UDP_BUFFER_OVERRUN" }
+func (r *RuleUDPBufferOverrun) ID() string { return "CONT_UDP_BUFFER_OVERRUN" }
+func (r *RuleUDPBufferOverrun) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleUDPBufferOverrun) Tier() int            { return 2 }
 func (r *RuleUDPBufferOverrun) IsPIDDependent() bool { return false }
 
@@ -1475,7 +2547,10 @@ func (r *RuleUDPBufferOverrun) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleTCPListenOverflowStall detects TCP listen queue overflow drop bursts resetting incoming connections.
 type RuleTCPListenOverflowStall struct{ noSuppression }
 
-func (r *RuleTCPListenOverflowStall) ID() string           { return "CONT_TCP_LISTEN_OVERFLOW_STALL" }
+func (r *RuleTCPListenOverflowStall) ID() string { return "CONT_TCP_LISTEN_OVERFLOW_STALL" }
+func (r *RuleTCPListenOverflowStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPListenOverflowStall) Tier() int            { return 2 }
 func (r *RuleTCPListenOverflowStall) IsPIDDependent() bool { return false }
 
@@ -1508,7 +2583,10 @@ func (r *RuleTCPListenOverflowStall) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleHugeTLBPoolExhaustion detects when configured explicit HugeTLB pool is 100% exhausted.
 type RuleHugeTLBPoolExhaustion struct{ noSuppression }
 
-func (r *RuleHugeTLBPoolExhaustion) ID() string           { return "CONT_HUGETLB_POOL_EXHAUSTION" }
+func (r *RuleHugeTLBPoolExhaustion) ID() string { return "CONT_HUGETLB_POOL_EXHAUSTION" }
+func (r *RuleHugeTLBPoolExhaustion) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleHugeTLBPoolExhaustion) Tier() int            { return 2 }
 func (r *RuleHugeTLBPoolExhaustion) IsPIDDependent() bool { return false }
 
@@ -1540,7 +2618,10 @@ func (r *RuleHugeTLBPoolExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RulePtraceTracerAttach detects active processes running with attached debuggers/tracers injecting syscall latency.
 type RulePtraceTracerAttach struct{ noSuppression }
 
-func (r *RulePtraceTracerAttach) ID() string           { return "CONT_PTRACE_TRACER_ATTACH" }
+func (r *RulePtraceTracerAttach) ID() string { return "CONT_PTRACE_TRACER_ATTACH" }
+func (r *RulePtraceTracerAttach) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePtraceTracerAttach) Tier() int            { return 2 }
 func (r *RulePtraceTracerAttach) IsPIDDependent() bool { return true }
 
@@ -1576,7 +2657,10 @@ func (r *RulePtraceTracerAttach) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleSysVSemaphoreLimit detects system-wide SysV IPC semaphore exhaustion blocking database connections.
 type RuleSysVSemaphoreLimit struct{ noSuppression }
 
-func (r *RuleSysVSemaphoreLimit) ID() string           { return "CONT_SYSV_SEMAPHORE_LIMIT" }
+func (r *RuleSysVSemaphoreLimit) ID() string { return "CONT_SYSV_SEMAPHORE_LIMIT" }
+func (r *RuleSysVSemaphoreLimit) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSysVSemaphoreLimit) Tier() int            { return 2 }
 func (r *RuleSysVSemaphoreLimit) IsPIDDependent() bool { return false }
 
@@ -1614,7 +2698,10 @@ func (r *RuleSysVSemaphoreLimit) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleTCPTimeWaitBucketOverflow detects TCP TIME_WAIT bucket saturation dropping new connections.
 type RuleTCPTimeWaitBucketOverflow struct{ noSuppression }
 
-func (r *RuleTCPTimeWaitBucketOverflow) ID() string           { return "CONT_TCP_TIMEWAIT_BUCKET_OVERFLOW" }
+func (r *RuleTCPTimeWaitBucketOverflow) ID() string { return "CONT_TCP_TIMEWAIT_BUCKET_OVERFLOW" }
+func (r *RuleTCPTimeWaitBucketOverflow) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPTimeWaitBucketOverflow) Tier() int            { return 2 }
 func (r *RuleTCPTimeWaitBucketOverflow) IsPIDDependent() bool { return false }
 
@@ -1650,7 +2737,10 @@ func (r *RuleTCPTimeWaitBucketOverflow) Evaluate(diff *collector.SnapshotDiff) (
 // RuleCgroupIOThrottleStall detects container I/O operations throttled by Cgroup v2 io.max controllers.
 type RuleCgroupIOThrottleStall struct{ noSuppression }
 
-func (r *RuleCgroupIOThrottleStall) ID() string           { return "CONT_CGROUP_IO_THROTTLE_STALL" }
+func (r *RuleCgroupIOThrottleStall) ID() string { return "CONT_CGROUP_IO_THROTTLE_STALL" }
+func (r *RuleCgroupIOThrottleStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleCgroupIOThrottleStall) Tier() int            { return 2 }
 func (r *RuleCgroupIOThrottleStall) IsPIDDependent() bool { return true }
 
@@ -1692,7 +2782,10 @@ func (r *RuleCgroupIOThrottleStall) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleAuditdBacklogWaitStall detects processes blocked in kernel space due to audit subsystem backlog saturation.
 type RuleAuditdBacklogWaitStall struct{ noSuppression }
 
-func (r *RuleAuditdBacklogWaitStall) ID() string           { return "CONT_AUDITD_BACKLOG_WAIT_STALL" }
+func (r *RuleAuditdBacklogWaitStall) ID() string { return "CONT_AUDITD_BACKLOG_WAIT_STALL" }
+func (r *RuleAuditdBacklogWaitStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleAuditdBacklogWaitStall) Tier() int            { return 2 }
 func (r *RuleAuditdBacklogWaitStall) IsPIDDependent() bool { return true }
 
@@ -1748,7 +2841,10 @@ func (r *RuleAuditdBacklogWaitStall) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleTCPSndbufExhaustion detects outbound TCP throughput stalls caused by saturated socket send buffers.
 type RuleTCPSndbufExhaustion struct{ noSuppression }
 
-func (r *RuleTCPSndbufExhaustion) ID() string           { return "CONT_TCP_SNDBUF_EXHAUSTION" }
+func (r *RuleTCPSndbufExhaustion) ID() string { return "CONT_TCP_SNDBUF_EXHAUSTION" }
+func (r *RuleTCPSndbufExhaustion) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPSndbufExhaustion) Tier() int            { return 2 }
 func (r *RuleTCPSndbufExhaustion) IsPIDDependent() bool { return true }
 
@@ -1813,7 +2909,10 @@ func (r *RuleTCPSndbufExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleXFSAILPushStall detects XFS filesystem journal metadata log locks and Active Item List pushes.
 type RuleXFSAILPushStall struct{ noSuppression }
 
-func (r *RuleXFSAILPushStall) ID() string           { return "CONT_XFS_AIL_PUSH_STALL" }
+func (r *RuleXFSAILPushStall) ID() string { return "CONT_XFS_AIL_PUSH_STALL" }
+func (r *RuleXFSAILPushStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleXFSAILPushStall) Tier() int            { return 2 }
 func (r *RuleXFSAILPushStall) IsPIDDependent() bool { return true }
 
@@ -1872,7 +2971,10 @@ func (r *RuleXFSAILPushStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 // RuleDMQueueCongestion detects Device Mapper (LVM / LUKS / dm-thin) virtual queue saturation.
 type RuleDMQueueCongestion struct{ noSuppression }
 
-func (r *RuleDMQueueCongestion) ID() string           { return "CONT_DM_QUEUE_CONGESTION" }
+func (r *RuleDMQueueCongestion) ID() string { return "CONT_DM_QUEUE_CONGESTION" }
+func (r *RuleDMQueueCongestion) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleDMQueueCongestion) Tier() int            { return 2 }
 func (r *RuleDMQueueCongestion) IsPIDDependent() bool { return true }
 
@@ -1937,7 +3039,10 @@ func (r *RuleDMQueueCongestion) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleTCPSYNCookieFloodStall detects inbound SYN queue exhaustion forcing degraded SYN cookie handshakes.
 type RuleTCPSYNCookieFloodStall struct{ noSuppression }
 
-func (r *RuleTCPSYNCookieFloodStall) ID() string           { return "CONT_TCP_SYN_COOKIE_FLOOD_STALL" }
+func (r *RuleTCPSYNCookieFloodStall) ID() string { return "CONT_TCP_SYN_COOKIE_FLOOD_STALL" }
+func (r *RuleTCPSYNCookieFloodStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPSYNCookieFloodStall) Tier() int            { return 2 }
 func (r *RuleTCPSYNCookieFloodStall) IsPIDDependent() bool { return false }
 
@@ -1975,7 +3080,10 @@ func (r *RuleTCPSYNCookieFloodStall) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleEpollWakeupContention detects multi-worker thundering herd wake-up contention in epoll event loops.
 type RuleEpollWakeupContention struct{ noSuppression }
 
-func (r *RuleEpollWakeupContention) ID() string           { return "CONT_EPOLL_WAKEUP_CONTENTION" }
+func (r *RuleEpollWakeupContention) ID() string { return "CONT_EPOLL_WAKEUP_CONTENTION" }
+func (r *RuleEpollWakeupContention) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleEpollWakeupContention) Tier() int            { return 2 }
 func (r *RuleEpollWakeupContention) IsPIDDependent() bool { return true }
 
@@ -2022,7 +3130,10 @@ func (r *RuleEpollWakeupContention) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleAIOEventLimitSaturation detects exhaustion of Linux kernel asynchronous I/O event limits.
 type RuleAIOEventLimitSaturation struct{ noSuppression }
 
-func (r *RuleAIOEventLimitSaturation) ID() string           { return "CONT_AIO_EVENT_LIMIT_SATURATION" }
+func (r *RuleAIOEventLimitSaturation) ID() string { return "CONT_AIO_EVENT_LIMIT_SATURATION" }
+func (r *RuleAIOEventLimitSaturation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleAIOEventLimitSaturation) Tier() int            { return 2 }
 func (r *RuleAIOEventLimitSaturation) IsPIDDependent() bool { return true }
 
@@ -2081,7 +3192,10 @@ func (r *RuleAIOEventLimitSaturation) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleKswapdCPUSpin detects background page reclamation daemon kswapd burning CPU failing to restore watermarks.
 type RuleKswapdCPUSpin struct{ noSuppression }
 
-func (r *RuleKswapdCPUSpin) ID() string           { return "CONT_KSWAPD_CPU_SPIN" }
+func (r *RuleKswapdCPUSpin) ID() string { return "CONT_KSWAPD_CPU_SPIN" }
+func (r *RuleKswapdCPUSpin) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleKswapdCPUSpin) Tier() int            { return 2 }
 func (r *RuleKswapdCPUSpin) IsPIDDependent() bool { return true }
 
@@ -2137,7 +3251,10 @@ func (r *RuleKswapdCPUSpin) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleMDRAIDResyncStall detects background Software RAID rebuild/scrubbing operations saturating storage.
 type RuleMDRAIDResyncStall struct{ noSuppression }
 
-func (r *RuleMDRAIDResyncStall) ID() string           { return "CONT_MD_RAID_RESYNC_STALL" }
+func (r *RuleMDRAIDResyncStall) ID() string { return "CONT_MD_RAID_RESYNC_STALL" }
+func (r *RuleMDRAIDResyncStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleMDRAIDResyncStall) Tier() int            { return 2 }
 func (r *RuleMDRAIDResyncStall) IsPIDDependent() bool { return false }
 
@@ -2190,7 +3307,10 @@ func (r *RuleMDRAIDResyncStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleNetOutOfOrderStall detects heavy out-of-order TCP segment queuing and socket buffer collapse.
 type RuleNetOutOfOrderStall struct{ noSuppression }
 
-func (r *RuleNetOutOfOrderStall) ID() string           { return "CONT_NET_OUT_OF_ORDER_STALL" }
+func (r *RuleNetOutOfOrderStall) ID() string { return "CONT_NET_OUT_OF_ORDER_STALL" }
+func (r *RuleNetOutOfOrderStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetOutOfOrderStall) Tier() int            { return 2 }
 func (r *RuleNetOutOfOrderStall) IsPIDDependent() bool { return false }
 
@@ -2237,7 +3357,10 @@ func (r *RuleNetOutOfOrderStall) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RulePOSIXRTSigQueueSaturation detects POSIX real-time signal queue capacity exhaustion.
 type RulePOSIXRTSigQueueSaturation struct{ noSuppression }
 
-func (r *RulePOSIXRTSigQueueSaturation) ID() string           { return "CONT_POSIX_RTSIG_QUEUE_SATURATION" }
+func (r *RulePOSIXRTSigQueueSaturation) ID() string { return "CONT_POSIX_RTSIG_QUEUE_SATURATION" }
+func (r *RulePOSIXRTSigQueueSaturation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePOSIXRTSigQueueSaturation) Tier() int            { return 2 }
 func (r *RulePOSIXRTSigQueueSaturation) IsPIDDependent() bool { return true }
 
@@ -2285,7 +3408,10 @@ func (r *RulePOSIXRTSigQueueSaturation) Evaluate(diff *collector.SnapshotDiff) (
 // RuleUDPSndbufExhaustion detects outbound UDP socket send buffer exhaustion.
 type RuleUDPSndbufExhaustion struct{ noSuppression }
 
-func (r *RuleUDPSndbufExhaustion) ID() string           { return "CONT_UDP_SNDBUF_EXHAUSTION" }
+func (r *RuleUDPSndbufExhaustion) ID() string { return "CONT_UDP_SNDBUF_EXHAUSTION" }
+func (r *RuleUDPSndbufExhaustion) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleUDPSndbufExhaustion) Tier() int            { return 2 }
 func (r *RuleUDPSndbufExhaustion) IsPIDDependent() bool { return false }
 
@@ -2326,7 +3452,10 @@ func (r *RuleUDPSndbufExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleCgroupV1CPUSharesStarvation detects containers starved due to low CPU shares.
 type RuleCgroupV1CPUSharesStarvation struct{ noSuppression }
 
-func (r *RuleCgroupV1CPUSharesStarvation) ID() string           { return "CONT_CGROUP_V1_CPU_SHARES_STARVATION" }
+func (r *RuleCgroupV1CPUSharesStarvation) ID() string { return "CONT_CGROUP_V1_CPU_SHARES_STARVATION" }
+func (r *RuleCgroupV1CPUSharesStarvation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleCgroupV1CPUSharesStarvation) Tier() int            { return 2 }
 func (r *RuleCgroupV1CPUSharesStarvation) IsPIDDependent() bool { return true }
 
@@ -2388,7 +3517,10 @@ func (r *RuleCgroupV1CPUSharesStarvation) Evaluate(diff *collector.SnapshotDiff)
 // RuleHugepageLeakNoReuse detects reserved explicit HugePages abandoned without active mappings.
 type RuleHugepageLeakNoReuse struct{ noSuppression }
 
-func (r *RuleHugepageLeakNoReuse) ID() string           { return "CONT_HUGEPAGE_LEAK_NO_REUSE" }
+func (r *RuleHugepageLeakNoReuse) ID() string { return "CONT_HUGEPAGE_LEAK_NO_REUSE" }
+func (r *RuleHugepageLeakNoReuse) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleHugepageLeakNoReuse) Tier() int            { return 2 }
 func (r *RuleHugepageLeakNoReuse) IsPIDDependent() bool { return false }
 
@@ -2433,7 +3565,10 @@ func (r *RuleHugepageLeakNoReuse) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleNetTCPAbortOnClose detects TCP connections reset due to unread receive buffer data on close.
 type RuleNetTCPAbortOnClose struct{ noSuppression }
 
-func (r *RuleNetTCPAbortOnClose) ID() string           { return "CONT_NET_TCP_ABORT_ON_CLOSE" }
+func (r *RuleNetTCPAbortOnClose) ID() string { return "CONT_NET_TCP_ABORT_ON_CLOSE" }
+func (r *RuleNetTCPAbortOnClose) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetTCPAbortOnClose) Tier() int            { return 2 }
 func (r *RuleNetTCPAbortOnClose) IsPIDDependent() bool { return false }
 
@@ -2472,7 +3607,10 @@ func (r *RuleNetTCPAbortOnClose) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleSchedYieldSpinChurn detects application threads burning CPU executing sched_yield in tight spinloops.
 type RuleSchedYieldSpinChurn struct{ noSuppression }
 
-func (r *RuleSchedYieldSpinChurn) ID() string           { return "CONT_SCHED_YIELD_SPIN_CHURN" }
+func (r *RuleSchedYieldSpinChurn) ID() string { return "CONT_SCHED_YIELD_SPIN_CHURN" }
+func (r *RuleSchedYieldSpinChurn) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSchedYieldSpinChurn) Tier() int            { return 2 }
 func (r *RuleSchedYieldSpinChurn) IsPIDDependent() bool { return true }
 
@@ -2518,7 +3656,10 @@ func (r *RuleSchedYieldSpinChurn) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleNetTCPCollapsePrune detects TCP receive buffer collapses and packet pruning.
 type RuleNetTCPCollapsePrune struct{ noSuppression }
 
-func (r *RuleNetTCPCollapsePrune) ID() string           { return "CONT_NET_TCP_COLLAPSE_PRUNE" }
+func (r *RuleNetTCPCollapsePrune) ID() string { return "CONT_NET_TCP_COLLAPSE_PRUNE" }
+func (r *RuleNetTCPCollapsePrune) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetTCPCollapsePrune) Tier() int            { return 2 }
 func (r *RuleNetTCPCollapsePrune) IsPIDDependent() bool { return false }
 
@@ -2559,7 +3700,10 @@ func (r *RuleNetTCPCollapsePrune) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleNetTCPMemoryAllocFail detects kernel TCP socket page allocation failures.
 type RuleNetTCPMemoryAllocFail struct{ noSuppression }
 
-func (r *RuleNetTCPMemoryAllocFail) ID() string           { return "CONT_NET_TCP_MEMORY_ALLOC_FAIL" }
+func (r *RuleNetTCPMemoryAllocFail) ID() string { return "CONT_NET_TCP_MEMORY_ALLOC_FAIL" }
+func (r *RuleNetTCPMemoryAllocFail) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetTCPMemoryAllocFail) Tier() int            { return 2 }
 func (r *RuleNetTCPMemoryAllocFail) IsPIDDependent() bool { return false }
 
@@ -2601,7 +3745,10 @@ func (r *RuleNetTCPMemoryAllocFail) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleNetTCPZeroWindowDrop detects TCP zero window advertising and stalled socket transmission.
 type RuleNetTCPZeroWindowDrop struct{ noSuppression }
 
-func (r *RuleNetTCPZeroWindowDrop) ID() string           { return "CONT_NET_TCP_ZERO_WINDOW_DROP" }
+func (r *RuleNetTCPZeroWindowDrop) ID() string { return "CONT_NET_TCP_ZERO_WINDOW_DROP" }
+func (r *RuleNetTCPZeroWindowDrop) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetTCPZeroWindowDrop) Tier() int            { return 2 }
 func (r *RuleNetTCPZeroWindowDrop) IsPIDDependent() bool { return false }
 
@@ -2638,7 +3785,10 @@ func (r *RuleNetTCPZeroWindowDrop) Evaluate(diff *collector.SnapshotDiff) (*Diag
 // RuleFutexPIDeadlockStall detects processes blocked on Priority-Inheritance futexes or mutex deadlocks.
 type RuleFutexPIDeadlockStall struct{ noSuppression }
 
-func (r *RuleFutexPIDeadlockStall) ID() string           { return "CONT_FUTEX_PI_DEADLOCK_STALL" }
+func (r *RuleFutexPIDeadlockStall) ID() string { return "CONT_FUTEX_PI_DEADLOCK_STALL" }
+func (r *RuleFutexPIDeadlockStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleFutexPIDeadlockStall) Tier() int            { return 2 }
 func (r *RuleFutexPIDeadlockStall) IsPIDDependent() bool { return true }
 
@@ -2685,7 +3835,10 @@ func (r *RuleFutexPIDeadlockStall) Evaluate(diff *collector.SnapshotDiff) (*Diag
 // RuleNetARPTableTrash detects ARP and IPv6 neighbor table capacity saturation and GC thrashing.
 type RuleNetARPTableTrash struct{ noSuppression }
 
-func (r *RuleNetARPTableTrash) ID() string           { return "CONT_NET_ARP_TABLE_TRASH" }
+func (r *RuleNetARPTableTrash) ID() string { return "CONT_NET_ARP_TABLE_TRASH" }
+func (r *RuleNetARPTableTrash) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetARPTableTrash) Tier() int            { return 2 }
 func (r *RuleNetARPTableTrash) IsPIDDependent() bool { return false }
 
@@ -2722,7 +3875,10 @@ func (r *RuleNetARPTableTrash) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleDirtyPagesDirectSyncStall detects direct writeback synchronous flushing stalls when dirty threshold is exceeded.
 type RuleDirtyPagesDirectSyncStall struct{ noSuppression }
 
-func (r *RuleDirtyPagesDirectSyncStall) ID() string           { return "CONT_DIRTY_PAGES_DIRECT_SYNC_STALL" }
+func (r *RuleDirtyPagesDirectSyncStall) ID() string { return "CONT_DIRTY_PAGES_DIRECT_SYNC_STALL" }
+func (r *RuleDirtyPagesDirectSyncStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleDirtyPagesDirectSyncStall) Tier() int            { return 2 }
 func (r *RuleDirtyPagesDirectSyncStall) IsPIDDependent() bool { return true }
 
@@ -2772,7 +3928,10 @@ func (r *RuleDirtyPagesDirectSyncStall) Evaluate(diff *collector.SnapshotDiff) (
 // RuleNFSRPCClientSaturation detects NFS client RPC slot table saturation and stalled remote procedure calls.
 type RuleNFSRPCClientSaturation struct{ noSuppression }
 
-func (r *RuleNFSRPCClientSaturation) ID() string           { return "CONT_NFS_RPC_SLOT_TABLE_SATURATION" }
+func (r *RuleNFSRPCClientSaturation) ID() string { return "CONT_NFS_RPC_SLOT_TABLE_SATURATION" }
+func (r *RuleNFSRPCClientSaturation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNFSRPCClientSaturation) Tier() int            { return 2 }
 func (r *RuleNFSRPCClientSaturation) IsPIDDependent() bool { return true }
 
@@ -2817,7 +3976,10 @@ func (r *RuleNFSRPCClientSaturation) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleUnixSocketBacklogOverflow detects UNIX domain socket send queue congestion and blocked peers.
 type RuleUnixSocketBacklogOverflow struct{ noSuppression }
 
-func (r *RuleUnixSocketBacklogOverflow) ID() string           { return "CONT_UNIX_SOCKET_BACKLOG_OVERFLOW" }
+func (r *RuleUnixSocketBacklogOverflow) ID() string { return "CONT_UNIX_SOCKET_BACKLOG_OVERFLOW" }
+func (r *RuleUnixSocketBacklogOverflow) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleUnixSocketBacklogOverflow) Tier() int            { return 2 }
 func (r *RuleUnixSocketBacklogOverflow) IsPIDDependent() bool { return true }
 
@@ -2862,7 +4024,10 @@ func (r *RuleUnixSocketBacklogOverflow) Evaluate(diff *collector.SnapshotDiff) (
 // RuleVFSInodeLockContention detects serialization bottlenecks on VFS directory/file write mutexes.
 type RuleVFSInodeLockContention struct{ noSuppression }
 
-func (r *RuleVFSInodeLockContention) ID() string           { return "CONT_VFS_INODE_LOCK_CONTENTION" }
+func (r *RuleVFSInodeLockContention) ID() string { return "CONT_VFS_INODE_LOCK_CONTENTION" }
+func (r *RuleVFSInodeLockContention) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleVFSInodeLockContention) Tier() int            { return 2 }
 func (r *RuleVFSInodeLockContention) IsPIDDependent() bool { return true }
 
@@ -2910,7 +4075,10 @@ func (r *RuleVFSInodeLockContention) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleKernelLockdBlocked detects processes stalled on POSIX advisory file locks (fcntl/flock).
 type RuleKernelLockdBlocked struct{ noSuppression }
 
-func (r *RuleKernelLockdBlocked) ID() string           { return "CONT_KERNEL_LOCKD_BLOCKED" }
+func (r *RuleKernelLockdBlocked) ID() string { return "CONT_KERNEL_LOCKD_BLOCKED" }
+func (r *RuleKernelLockdBlocked) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleKernelLockdBlocked) Tier() int            { return 2 }
 func (r *RuleKernelLockdBlocked) IsPIDDependent() bool { return true }
 
@@ -2955,7 +4123,10 @@ func (r *RuleKernelLockdBlocked) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleSchedAutogroupStarvation detects scheduler autogroup CPU fairness starvation on multi-threaded session processes.
 type RuleSchedAutogroupStarvation struct{ noSuppression }
 
-func (r *RuleSchedAutogroupStarvation) ID() string           { return "CONT_SCHED_AUTOGROUP_STARVATION" }
+func (r *RuleSchedAutogroupStarvation) ID() string { return "CONT_SCHED_AUTOGROUP_STARVATION" }
+func (r *RuleSchedAutogroupStarvation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSchedAutogroupStarvation) Tier() int            { return 2 }
 func (r *RuleSchedAutogroupStarvation) IsPIDDependent() bool { return true }
 
@@ -3004,7 +4175,10 @@ func (r *RuleSchedAutogroupStarvation) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleFtraceRingBufferStall detects kernel ftrace/tracepoint ring buffer saturation and tracing lock stalls.
 type RuleFtraceRingBufferStall struct{ noSuppression }
 
-func (r *RuleFtraceRingBufferStall) ID() string           { return "CONT_FTRACE_RING_BUFFER_STALL" }
+func (r *RuleFtraceRingBufferStall) ID() string { return "CONT_FTRACE_RING_BUFFER_STALL" }
+func (r *RuleFtraceRingBufferStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleFtraceRingBufferStall) Tier() int            { return 2 }
 func (r *RuleFtraceRingBufferStall) IsPIDDependent() bool { return true }
 
@@ -3049,7 +4223,10 @@ func (r *RuleFtraceRingBufferStall) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleNetDevGROCellDrop detects Generic Receive Offload cell drops and softnet processing overruns.
 type RuleNetDevGROCellDrop struct{ noSuppression }
 
-func (r *RuleNetDevGROCellDrop) ID() string           { return "CONT_NET_DEV_GRO_CELL_DROP" }
+func (r *RuleNetDevGROCellDrop) ID() string { return "CONT_NET_DEV_GRO_CELL_DROP" }
+func (r *RuleNetDevGROCellDrop) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetDevGROCellDrop) Tier() int            { return 2 }
 func (r *RuleNetDevGROCellDrop) IsPIDDependent() bool { return false }
 
@@ -3085,7 +4262,10 @@ func (r *RuleNetDevGROCellDrop) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleMemCompactMigrationFailRate detects high rates of page migration failures during memory compaction.
 type RuleMemCompactMigrationFailRate struct{ noSuppression }
 
-func (r *RuleMemCompactMigrationFailRate) ID() string           { return "CONT_MEM_COMPACT_MIGRATION_FAIL_RATE" }
+func (r *RuleMemCompactMigrationFailRate) ID() string { return "CONT_MEM_COMPACT_MIGRATION_FAIL_RATE" }
+func (r *RuleMemCompactMigrationFailRate) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleMemCompactMigrationFailRate) Tier() int            { return 2 }
 func (r *RuleMemCompactMigrationFailRate) IsPIDDependent() bool { return false }
 
@@ -3121,7 +4301,10 @@ func (r *RuleMemCompactMigrationFailRate) Evaluate(diff *collector.SnapshotDiff)
 // RuleNetTCPFastOpenFail detects TCP Fast Open (TFO) connection failures due to middlebox cookie drops.
 type RuleNetTCPFastOpenFail struct{ noSuppression }
 
-func (r *RuleNetTCPFastOpenFail) ID() string           { return "CONT_NET_TCP_FASTOPEN_FAIL" }
+func (r *RuleNetTCPFastOpenFail) ID() string { return "CONT_NET_TCP_FASTOPEN_FAIL" }
+func (r *RuleNetTCPFastOpenFail) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetTCPFastOpenFail) Tier() int            { return 2 }
 func (r *RuleNetTCPFastOpenFail) IsPIDDependent() bool { return false }
 
@@ -3158,7 +4341,10 @@ func (r *RuleNetTCPFastOpenFail) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleNetTCPSynAckRetransStall detects repeated SYN+ACK segment retransmissions during connection establishment.
 type RuleNetTCPSynAckRetransStall struct{ noSuppression }
 
-func (r *RuleNetTCPSynAckRetransStall) ID() string           { return "CONT_NET_TCP_SYN_ACK_RETRANS_STALL" }
+func (r *RuleNetTCPSynAckRetransStall) ID() string { return "CONT_NET_TCP_SYN_ACK_RETRANS_STALL" }
+func (r *RuleNetTCPSynAckRetransStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetTCPSynAckRetransStall) Tier() int            { return 2 }
 func (r *RuleNetTCPSynAckRetransStall) IsPIDDependent() bool { return false }
 
@@ -3192,7 +4378,10 @@ func (r *RuleNetTCPSynAckRetransStall) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleNetSocketRecvStall detects processes blocked in socket receive sleep while experiencing network stalls.
 type RuleNetSocketRecvStall struct{ noSuppression }
 
-func (r *RuleNetSocketRecvStall) ID() string           { return "CONT_NET_SOCKET_RECV_STALL" }
+func (r *RuleNetSocketRecvStall) ID() string { return "CONT_NET_SOCKET_RECV_STALL" }
+func (r *RuleNetSocketRecvStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetSocketRecvStall) Tier() int            { return 2 }
 func (r *RuleNetSocketRecvStall) IsPIDDependent() bool { return true }
 
@@ -3226,7 +4415,10 @@ func (r *RuleNetSocketRecvStall) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleStorageBlkThrottleStall detects processes blocked on cgroup block I/O throttle queues.
 type RuleStorageBlkThrottleStall struct{ noSuppression }
 
-func (r *RuleStorageBlkThrottleStall) ID() string           { return "CONT_STORAGE_BLK_THROTTLE_STALL" }
+func (r *RuleStorageBlkThrottleStall) ID() string { return "CONT_STORAGE_BLK_THROTTLE_STALL" }
+func (r *RuleStorageBlkThrottleStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleStorageBlkThrottleStall) Tier() int            { return 2 }
 func (r *RuleStorageBlkThrottleStall) IsPIDDependent() bool { return true }
 
@@ -3260,7 +4452,10 @@ func (r *RuleStorageBlkThrottleStall) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleNetTCPDeferAcceptTimeout detects listener connection drops caused by TCP_DEFER_ACCEPT timeouts.
 type RuleNetTCPDeferAcceptTimeout struct{ noSuppression }
 
-func (r *RuleNetTCPDeferAcceptTimeout) ID() string           { return "CONT_NET_TCP_DEFER_ACCEPT_TIMEOUT" }
+func (r *RuleNetTCPDeferAcceptTimeout) ID() string { return "CONT_NET_TCP_DEFER_ACCEPT_TIMEOUT" }
+func (r *RuleNetTCPDeferAcceptTimeout) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetTCPDeferAcceptTimeout) Tier() int            { return 2 }
 func (r *RuleNetTCPDeferAcceptTimeout) IsPIDDependent() bool { return false }
 
@@ -3294,7 +4489,10 @@ func (r *RuleNetTCPDeferAcceptTimeout) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleMemcgReclaimDirectStall detects processes stalled in synchronous cgroup memory direct reclaim.
 type RuleMemcgReclaimDirectStall struct{ noSuppression }
 
-func (r *RuleMemcgReclaimDirectStall) ID() string           { return "CONT_MEMCG_RECLAIM_DIRECT_STALL" }
+func (r *RuleMemcgReclaimDirectStall) ID() string { return "CONT_MEMCG_RECLAIM_DIRECT_STALL" }
+func (r *RuleMemcgReclaimDirectStall) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleMemcgReclaimDirectStall) Tier() int            { return 2 }
 func (r *RuleMemcgReclaimDirectStall) IsPIDDependent() bool { return true }
 
@@ -3328,7 +4526,10 @@ func (r *RuleMemcgReclaimDirectStall) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleXFSAllocBtreeContention detects allocation btree lock contention on high-concurrency XFS filesystems.
 type RuleXFSAllocBtreeContention struct{ noSuppression }
 
-func (r *RuleXFSAllocBtreeContention) ID() string           { return "CONT_XFS_ALLOC_BTREE_CONTENTION" }
+func (r *RuleXFSAllocBtreeContention) ID() string { return "CONT_XFS_ALLOC_BTREE_CONTENTION" }
+func (r *RuleXFSAllocBtreeContention) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleXFSAllocBtreeContention) Tier() int            { return 2 }
 func (r *RuleXFSAllocBtreeContention) IsPIDDependent() bool { return true }
 
@@ -3362,7 +4563,10 @@ func (r *RuleXFSAllocBtreeContention) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleSchedMigrationCostOverhead detects hyperactive scheduler task migration trashing CPU caches.
 type RuleSchedMigrationCostOverhead struct{ noSuppression }
 
-func (r *RuleSchedMigrationCostOverhead) ID() string           { return "CONT_SCHED_MIGRATION_COST_OVERHEAD" }
+func (r *RuleSchedMigrationCostOverhead) ID() string { return "CONT_SCHED_MIGRATION_COST_OVERHEAD" }
+func (r *RuleSchedMigrationCostOverhead) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSchedMigrationCostOverhead) Tier() int            { return 2 }
 func (r *RuleSchedMigrationCostOverhead) IsPIDDependent() bool { return false }
 
@@ -3394,7 +4598,10 @@ func (r *RuleSchedMigrationCostOverhead) Evaluate(diff *collector.SnapshotDiff) 
 // RuleNetTCPZeroWindowAdvert detects zero window receive advertisements freezing ingress streams.
 type RuleNetTCPZeroWindowAdvert struct{ noSuppression }
 
-func (r *RuleNetTCPZeroWindowAdvert) ID() string           { return "CONT_NET_TCP_ZERO_WINDOW_ADVERT" }
+func (r *RuleNetTCPZeroWindowAdvert) ID() string { return "CONT_NET_TCP_ZERO_WINDOW_ADVERT" }
+func (r *RuleNetTCPZeroWindowAdvert) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleNetTCPZeroWindowAdvert) Tier() int            { return 2 }
 func (r *RuleNetTCPZeroWindowAdvert) IsPIDDependent() bool { return false }
 
@@ -3430,7 +4637,10 @@ func (r *RuleNetTCPZeroWindowAdvert) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RulePSISomeIOPressureSpike detects storage I/O delay spikes from Pressure Stall Information (PSI).
 type RulePSISomeIOPressureSpike struct{ noSuppression }
 
-func (r *RulePSISomeIOPressureSpike) ID() string           { return "CONT_PSI_SOME_IO_PRESSURE_SPIKE" }
+func (r *RulePSISomeIOPressureSpike) ID() string { return "CONT_PSI_SOME_IO_PRESSURE_SPIKE" }
+func (r *RulePSISomeIOPressureSpike) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePSISomeIOPressureSpike) Tier() int            { return 2 }
 func (r *RulePSISomeIOPressureSpike) IsPIDDependent() bool { return false }
 
@@ -3462,7 +4672,10 @@ func (r *RulePSISomeIOPressureSpike) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RulePSISomeCPUPressureSpike detects CPU runqueue delay spikes from Pressure Stall Information (PSI).
 type RulePSISomeCPUPressureSpike struct{ noSuppression }
 
-func (r *RulePSISomeCPUPressureSpike) ID() string           { return "CONT_PSI_SOME_CPU_PRESSURE_SPIKE" }
+func (r *RulePSISomeCPUPressureSpike) ID() string { return "CONT_PSI_SOME_CPU_PRESSURE_SPIKE" }
+func (r *RulePSISomeCPUPressureSpike) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePSISomeCPUPressureSpike) Tier() int            { return 2 }
 func (r *RulePSISomeCPUPressureSpike) IsPIDDependent() bool { return false }
 
@@ -3494,7 +4707,10 @@ func (r *RulePSISomeCPUPressureSpike) Evaluate(diff *collector.SnapshotDiff) (*D
 // RulePSIFullMemoryPressureSpike detects total system lock during paging from Pressure Stall Information (PSI).
 type RulePSIFullMemoryPressureSpike struct{ noSuppression }
 
-func (r *RulePSIFullMemoryPressureSpike) ID() string           { return "CONT_PSI_FULL_MEMORY_PRESSURE_SPIKE" }
+func (r *RulePSIFullMemoryPressureSpike) ID() string { return "CONT_PSI_FULL_MEMORY_PRESSURE_SPIKE" }
+func (r *RulePSIFullMemoryPressureSpike) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePSIFullMemoryPressureSpike) Tier() int            { return 2 }
 func (r *RulePSIFullMemoryPressureSpike) IsPIDDependent() bool { return false }
 
@@ -3526,7 +4742,10 @@ func (r *RulePSIFullMemoryPressureSpike) Evaluate(diff *collector.SnapshotDiff) 
 // RulePipeReadBurstBlock detects processes blocked in uninterruptible sleep on pipe read operations.
 type RulePipeReadBurstBlock struct{ noSuppression }
 
-func (r *RulePipeReadBurstBlock) ID() string           { return "CONT_PIPE_READ_BURST_BLOCK" }
+func (r *RulePipeReadBurstBlock) ID() string { return "CONT_PIPE_READ_BURST_BLOCK" }
+func (r *RulePipeReadBurstBlock) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RulePipeReadBurstBlock) Tier() int            { return 2 }
 func (r *RulePipeReadBurstBlock) IsPIDDependent() bool { return true }
 
@@ -3560,7 +4779,10 @@ func (r *RulePipeReadBurstBlock) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleTCPCloseWaitLeak detects accumulated CLOSE_WAIT sockets indicating application FD/socket leaks.
 type RuleTCPCloseWaitLeak struct{ noSuppression }
 
-func (r *RuleTCPCloseWaitLeak) ID() string           { return "CONT_TCP_CLOSE_WAIT_LEAK" }
+func (r *RuleTCPCloseWaitLeak) ID() string { return "CONT_TCP_CLOSE_WAIT_LEAK" }
+func (r *RuleTCPCloseWaitLeak) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleTCPCloseWaitLeak) Tier() int            { return 2 }
 func (r *RuleTCPCloseWaitLeak) IsPIDDependent() bool { return true }
 
@@ -3620,7 +4842,10 @@ func findTopFDProcess(procs []collector.ProcessDiff) *collector.ProcessDiff {
 // RuleSustainedLoadSaturation detects multi-minute sustained load average saturation distinguishing from 1s bursts.
 type RuleSustainedLoadSaturation struct{ noSuppression }
 
-func (r *RuleSustainedLoadSaturation) ID() string           { return "CONT_SUSTAINED_LOAD_SATURATION" }
+func (r *RuleSustainedLoadSaturation) ID() string { return "CONT_SUSTAINED_LOAD_SATURATION" }
+func (r *RuleSustainedLoadSaturation) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleSustainedLoadSaturation) Tier() int            { return 2 }
 func (r *RuleSustainedLoadSaturation) IsPIDDependent() bool { return false }
 
@@ -3668,7 +4893,10 @@ func (r *RuleSustainedLoadSaturation) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleRunawayCPUProcess detects single or multi-thread runaway CPU hogs on a core.
 type RuleRunawayCPUProcess struct{ noSuppression }
 
-func (r *RuleRunawayCPUProcess) ID() string           { return "CONT_RUNAWAY_CPU_PROCESS" }
+func (r *RuleRunawayCPUProcess) ID() string { return "CONT_RUNAWAY_CPU_PROCESS" }
+func (r *RuleRunawayCPUProcess) Explain() RuleExplanation {
+	return tier2Explanations[r.ID()]
+}
 func (r *RuleRunawayCPUProcess) Tier() int            { return 2 }
 func (r *RuleRunawayCPUProcess) IsPIDDependent() bool { return true }
 
@@ -3706,5 +4934,110 @@ func (r *RuleRunawayCPUProcess) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 		CulpritName:    topProc.Comm,
 		CulpritDetails: fmt.Sprintf("%.1f%% CPU utilization", topProc.CPUPercent),
 		Remediation:    fmt.Sprintf("Lower CPU scheduling priority: renice -n 19 -p %d, or send graceful stop: kill -TERM %d", topProc.PID, topProc.PID),
+	}, true
+}
+
+// RuleProcessSwapPinned detects individual processes with > 500MB swapped out under system memory pressure.
+type RuleProcessSwapPinned struct {
+	noSuppression
+}
+
+func (r *RuleProcessSwapPinned) ID() string             { return "CONT_PROCESS_SWAP_PINNED" }
+func (r *RuleProcessSwapPinned) Tier() int              { return 2 }
+func (r *RuleProcessSwapPinned) IsPIDDependent() bool   { return true }
+func (r *RuleProcessSwapPinned) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleProcessSwapPinned) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || len(diff.Processes) == 0 {
+		return nil, false
+	}
+
+	var topProc *collector.ProcessDiff
+	for i := range diff.Processes {
+		p := &diff.Processes[i]
+		if p.SmapsRollup.Available && p.SmapsRollup.Swap > 512000 {
+			if topProc == nil || p.SmapsRollup.Swap > topProc.SmapsRollup.Swap {
+				topProc = p
+			}
+		}
+	}
+	if topProc == nil {
+		return nil, false
+	}
+
+	memPressure := false
+	var memTotal, memAvail uint64
+	if diff.LatestSnapshot != nil {
+		memTotal = diff.LatestSnapshot.Memory.MemTotal
+		memAvail = diff.LatestSnapshot.Memory.MemAvailable
+		if memTotal > 0 && memAvail < (memTotal*20/100) {
+			memPressure = true
+		}
+	}
+	if diff.VMStat.PswpinDelta > 0 {
+		memPressure = true
+	}
+	if !memPressure {
+		return nil, false
+	}
+
+	swapMB := float64(topProc.SmapsRollup.Swap) / 1024.0
+	return &Diagnosis{
+		RuleID:      r.ID(),
+		Tier:        2,
+		Severity:    SeverityHigh,
+		Confidence:  0.85,
+		Title:       fmt.Sprintf("Process Swap-Pinned (PID %d [%s])", topProc.PID, topProc.Comm),
+		Explanation: fmt.Sprintf("Process '%s' (PID %d) has %.1f MB of memory swapped out while system memory pressure is elevated.", topProc.Comm, topProc.PID, swapMB),
+		Evidence: []string{
+			fmt.Sprintf("Process Swapped Memory: %.1f MB (PID %d [%s])", swapMB, topProc.PID, topProc.Comm),
+			fmt.Sprintf("System MemAvailable: %d KB (MemTotal: %d KB) | Pswpin Delta: %d", memAvail, memTotal, diff.VMStat.PswpinDelta),
+		},
+		CulpritPID:     topProc.PID,
+		CulpritName:    topProc.Comm,
+		CulpritDetails: fmt.Sprintf("%.1f MB swapped out", swapMB),
+		Remediation:    fmt.Sprintf("Reduce memory usage of process %s or increase system RAM", topProc.Comm),
+	}, true
+}
+
+// RuleDentryCacheExplosion detects excessive dentry slab object allocations under system memory pressure.
+type RuleDentryCacheExplosion struct {
+	noSuppression
+}
+
+func (r *RuleDentryCacheExplosion) ID() string             { return "CONT_DENTRY_CACHE_EXPLOSION" }
+func (r *RuleDentryCacheExplosion) Tier() int              { return 2 }
+func (r *RuleDentryCacheExplosion) IsPIDDependent() bool   { return false }
+func (r *RuleDentryCacheExplosion) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleDentryCacheExplosion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || diff.LatestSnapshot == nil || !diff.LatestSnapshot.SystemConfig.Slab.Available {
+		return nil, false
+	}
+
+	slab := diff.LatestSnapshot.SystemConfig.Slab
+	if slab.DentryCacheActive <= 2000000 {
+		return nil, false
+	}
+
+	memTotal := diff.LatestSnapshot.Memory.MemTotal
+	memAvail := diff.LatestSnapshot.Memory.MemAvailable
+	if memTotal == 0 || memAvail >= (memTotal*20/100) {
+		return nil, false
+	}
+
+	availPct := float64(memAvail) / float64(memTotal) * 100.0
+	return &Diagnosis{
+		RuleID:      r.ID(),
+		Tier:        2,
+		Severity:    SeverityHigh,
+		Confidence:  0.75,
+		Title:       "Kernel Dentry Cache Slab Explosion",
+		Explanation: fmt.Sprintf("Kernel dentry cache contains %d active directory entries while available memory is depleted (%.1f%% of MemTotal).", slab.DentryCacheActive, availPct),
+		Evidence: []string{
+			fmt.Sprintf("Active Dentry Cache Objects: %d (Total: %d)", slab.DentryCacheActive, slab.DentryCacheTotal),
+			fmt.Sprintf("Available Memory: %.1f%% (Pressure threshold: < 20.0%%)", availPct),
+		},
+		Remediation: "echo 2 > /proc/sys/vm/drop_caches (requires root) to release dentry/inode caches",
 	}, true
 }

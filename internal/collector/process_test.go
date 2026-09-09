@@ -145,6 +145,10 @@ func TestScanProcessesMock(t *testing.T) {
 		t.Fatalf("failed to write oom_score: %v", err)
 	}
 
+	if err := os.WriteFile(filepath.Join(pidDir, "oom_score_adj"), []byte("-1000\n"), 0644); err != nil {
+		t.Fatalf("failed to write oom_score_adj: %v", err)
+	}
+
 	ioContent := "read_bytes: 1048576\nwrite_bytes: 2097152\n"
 	if err := os.WriteFile(filepath.Join(pidDir, "io"), []byte(ioContent), 0644); err != nil {
 		t.Fatalf("failed to write io: %v", err)
@@ -189,6 +193,9 @@ func TestScanProcessesMock(t *testing.T) {
 	}
 	if p.OOMScore != 250 {
 		t.Errorf("expected OOMScore 250, got %d", p.OOMScore)
+	}
+	if p.OOMScoreAdj != -1000 {
+		t.Errorf("expected OOMScoreAdj -1000, got %d", p.OOMScoreAdj)
 	}
 	if p.ReadBytes != 1048576 || p.WriteBytes != 2097152 {
 		t.Errorf("unexpected io stats: read=%d, write=%d", p.ReadBytes, p.WriteBytes)
@@ -248,3 +255,128 @@ func TestLiveHostCollectProcesses(t *testing.T) {
 
 	t.Logf("Discovered %d processes on host", len(procs))
 }
+
+func TestReadFileWithBuf(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := "hello world from process collector buffer test"
+	filePath := filepath.Join(tmpDir, "test_file")
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	buf4k := make([]byte, 4096)
+	data, err := readFileWithBuf(filePath, buf4k)
+	if err != nil {
+		t.Fatalf("readFileWithBuf failed: %v", err)
+	}
+	if string(data) != content {
+		t.Errorf("expected %q, got %q", content, string(data))
+	}
+
+	bufSmall := make([]byte, 10)
+	dataFallback, err := readFileWithBuf(filePath, bufSmall)
+	if err != nil {
+		t.Fatalf("readFileWithBuf with small buffer failed: %v", err)
+	}
+	if string(dataFallback) != content {
+		t.Errorf("expected fallback to read entire content %q, got %q", content, string(dataFallback))
+	}
+
+	if _, err := readFileWithBuf(filepath.Join(tmpDir, "does_not_exist"), buf4k); err == nil {
+		t.Errorf("expected error for non-existent file")
+	}
+}
+
+func TestParseSmapsRollup(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := `Rss:                2048 kB
+Pss:                1024 kB
+Shared_Clean:        512 kB
+Shared_Dirty:        256 kB
+Private_Clean:       256 kB
+Private_Dirty:      1024 kB
+Swap:                640 kB
+`
+	filePath := filepath.Join(tmpDir, "smaps_rollup")
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	info, err := ParseSmapsRollup(filePath)
+	if err != nil {
+		t.Fatalf("ParseSmapsRollup failed: %v", err)
+	}
+	if !info.Available {
+		t.Fatalf("expected Available=true, got false")
+	}
+	if info.RSS != 2048 || info.PSS != 1024 || info.Swap != 640 {
+		t.Errorf("unexpected metrics: RSS=%d, PSS=%d, Swap=%d", info.RSS, info.PSS, info.Swap)
+	}
+	if info.SharedClean != 512 || info.SharedDirty != 256 {
+		t.Errorf("unexpected shared: clean=%d, dirty=%d", info.SharedClean, info.SharedDirty)
+	}
+	if info.PrivateClean != 256 || info.PrivateDirty != 1024 {
+		t.Errorf("unexpected private: clean=%d, dirty=%d", info.PrivateClean, info.PrivateDirty)
+	}
+
+	// Nonexistent file test
+	missing, err := ParseSmapsRollup(filepath.Join(tmpDir, "nonexistent"))
+	if err != nil {
+		t.Fatalf("expected nil error on missing file, got: %v", err)
+	}
+	if missing.Available {
+		t.Errorf("expected Available=false for missing smaps_rollup")
+	}
+}
+
+func TestCountProcessFDTypes(t *testing.T) {
+	tmpDir := t.TempDir()
+	fdDir := filepath.Join(tmpDir, "42", "fd")
+	if err := os.MkdirAll(fdDir, 0755); err != nil {
+		t.Fatalf("failed to create fake fd dir: %v", err)
+	}
+
+	targets := map[string]string{
+		"0": "/dev/null",
+		"1": "socket:[12345]",
+		"2": "pipe:[67890]",
+		"3": "anon_inode:[eventpoll]",
+		"4": "custom_handle",
+	}
+
+	for name, target := range targets {
+		if err := os.Symlink(target, filepath.Join(fdDir, name)); err != nil {
+			t.Fatalf("failed to create test symlink %s: %v", name, err)
+		}
+	}
+
+	counts, err := CountProcessFDTypes(tmpDir, 42)
+	if err != nil {
+		t.Fatalf("CountProcessFDTypes failed: %v", err)
+	}
+
+	if counts.Total != 5 {
+		t.Errorf("expected Total 5, got %d", counts.Total)
+	}
+	if counts.Files != 1 {
+		t.Errorf("expected Files 1, got %d", counts.Files)
+	}
+	if counts.Sockets != 1 {
+		t.Errorf("expected Sockets 1, got %d", counts.Sockets)
+	}
+	if counts.Pipes != 1 {
+		t.Errorf("expected Pipes 1, got %d", counts.Pipes)
+	}
+	if counts.AnonInodes != 1 {
+		t.Errorf("expected AnonInodes 1, got %d", counts.AnonInodes)
+	}
+	if counts.Other != 1 {
+		t.Errorf("expected Other 1, got %d", counts.Other)
+	}
+
+	// Test nonexistent PID
+	if _, err := CountProcessFDTypes(tmpDir, 99999); err == nil {
+		t.Errorf("expected error for nonexistent PID")
+	}
+}
+

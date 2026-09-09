@@ -1,11 +1,12 @@
 # why-slow ⚡
 
+[![CI](https://github.com/cetinkayaismail/why-slow/actions/workflows/ci.yml/badge.svg)](https://github.com/cetinkayaismail/why-slow/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(stdlib%20only)-success)](https://pkg.go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20x86__64%20%7C%20ARM64-lightgrey)](https://kernel.org)
 [![CGO](https://img.shields.io/badge/CGO-Disabled%20(Pure%20Go)-blue)](https://golang.org)
-[![Security](https://img.shields.io/badge/Security-Zero%20Writes%20%7C%20Read--Only-green)](docs/ARCHITECTURE.md)
+[![Security](https://img.shields.io/badge/Security-Zero%20Writes%20%7C%20Read--Only-green)](SECURITY.md)
 [![Compliance](https://img.shields.io/badge/Compliance-PCI--DSS%20%7C%20SOC%202%20Ready-blueviolet)](docs/ARCHITECTURE.md)
 
 **Enterprise-Grade Linux Kernel Diagnostic & Root-Cause Analysis Engine**
@@ -101,8 +102,8 @@ why-slow --json
 # Compact single-line NDJSON output for log shippers
 why-slow --json --compact
 
-# Launch interactive raw terminal drilldown UI
-why-slow --tui
+# Show actionable tuning and remediation suggestions
+why-slow --remedy
 
 # Disable ANSI color coding (or set NO_COLOR=1)
 why-slow --no-color
@@ -112,13 +113,18 @@ why-slow --no-color
 
 | Flag | Default | Description |
 |---|---|---|
-| `--interval <dur>` | `1s` | Sampling window between Snapshot A and Snapshot B (e.g. `1s`, `2s`, `5s`) |
+| `--interval <dur>` | `3s` | Sampling window between Snapshot A and Snapshot B (e.g. `1s`, `3s`, `10s`) |
+| `--remedy` | `false` | Display recommended remediation and tuning advice for diagnosed issues |
+| `--top <n>` | `0` | Append Top N processes table sorted by CPU and RSS |
+| `--pid <pid>` | `0` | Single-process deep dive analysis for target PID |
+| `--explain <id>` | `""` | Print detailed kernel documentation for a diagnostic rule and exit |
+| `--list-rules` | `false` | List all registered diagnostic rules grouped by tier and subsystem |
+| `--disable-rules` | `""` | Comma-separated list of rule IDs to disable during evaluation |
 | `--samples <n>` | `1` | Number of sampling windows to collect (evaluates median for noise reduction) |
 | `--watch` | `false` | Run continuously as a background sentinel reporting new bottlenecks |
 | `--alert-threshold <lvl>` | `info` | Minimum severity to report in watch mode (`critical`, `high`, `medium`, `info`) |
 | `--json` | `false` | Output diagnostic report formatted as structured JSON |
 | `--compact` | `false` | Output compact single-line JSON (used in combination with `--json`) |
-| `--tui` | `false` | Launch interactive terminal user interface for interactive inspection |
 | `--no-color` | `false` | Disable ANSI color formatting in terminal output |
 | `--version` | `false` | Print `why-slow` version and build metadata |
 
@@ -126,7 +132,7 @@ why-slow --no-color
 
 ## 🧠 Diagnostic Rules Overview
 
-`why-slow` evaluates telemetry across **160 prioritized diagnostic rules**:
+`why-slow` evaluates telemetry across **164 prioritized diagnostic rules**:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -168,7 +174,18 @@ why-slow --no-color
 | 📡 **[SIEM & APM Integration](docs/INTEGRATION_GUIDE.md)** | JSON Schema (Draft 2020-12), Splunk, Elastic SIEM, Datadog, and Vector pipeline configs. |
 | 🎯 **[Diagnostic Disambiguation](docs/DIAGNOSTIC_DISAMBIGUATION.md)** | Root cause isolation theory, causal suppression, and multi-signal disambiguation matrices. |
 | 🏆 **[Master Benchmark & Stress Report](docs/MASTER_BENCHMARK.md)** | Live stress test verification, 5,000 PID density benchmarks, and resource ceiling proofs. |
+| 🧪 **[Demo & Scenario Simulation Suite](demo/README.md)** | Self-contained, non-destructive simulation runner (`demo/run.sh`) to safely test bottlenecks. |
 | 📜 **[Release Changelog](docs/CHANGELOG.md)** | Version history, releases, and architectural change records. |
+
+---
+
+## 🤝 Community & Governance
+
+We welcome contributions from systems engineers, SREs, kernel developers, and open-source contributors!
+
+- 🛠️ **[Contributing Guide](CONTRIBUTING.md)**: Development prerequisites, rule implementation walkthrough, and PR guidelines.
+- 🔒 **[Security Policy](SECURITY.md)**: Vulnerability disclosure procedure, threat model, and zero-write security invariants.
+- 📜 **[Code of Conduct](CODE_OF_CONDUCT.md)**: Our pledge to maintain an inclusive, harassment-free environment (Contributor Covenant v2.1).
 
 ---
 

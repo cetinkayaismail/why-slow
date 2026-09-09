@@ -34,6 +34,87 @@ func GetTier1Rules() []Rule {
 	}
 }
 
+var tier1Explanations = map[string]RuleExplanation{
+	"BASE_CPU_SATURATION": {
+		Description:   "All CPU cores are fully saturated and the scheduler runqueue is overloaded with waiting threads.",
+		Thresholds:    []string{"CPU idle < 2.0%", "procs_running >= 2x CPU cores (min 4)"},
+		KernelSources: []string{"/proc/stat"},
+		Remediation:   "Identify and throttle or renice runaway compute processes.",
+	},
+	"BASE_OOM_DANGER": {
+		Description:   "Available physical memory is below 3% and swap is depleted. The kernel OOM killer will soon terminate processes.",
+		Thresholds:    []string{"MemAvailable < 3.0% of MemTotal", "SwapFree < 5.0% of SwapTotal (or no swap)"},
+		KernelSources: []string{"/proc/meminfo"},
+		Remediation:   "Add physical RAM, increase swap space, or terminate memory-leaking processes.",
+	},
+	"BASE_DISK_SPACE_FULL": {
+		Description:   "A filesystem has exhausted available storage capacity, causing write operations and log appends to fail.",
+		Thresholds:    []string{"Filesystem used >= 99.0% or 0 bytes available"},
+		KernelSources: []string{"syscall.Statfs()"},
+		Remediation:   "Free disk space immediately: truncate old logs, clean package caches, or delete temp files.",
+	},
+	"BASE_DISK_HARDWARE_SATURATION": {
+		Description:   "A physical disk device had I/O requests in flight for >= 95% of the sampling window.",
+		Thresholds:    []string{"io_ticks delta >= 95.0% of sampling window"},
+		KernelSources: []string{"/proc/diskstats"},
+		Remediation:   "Reduce write-heavy background tasks, spread I/O across drives, or upgrade to higher-IOPS storage.",
+	},
+	"BASE_THERMAL_THROTTLING": {
+		Description:   "CPU cores are operating below 40% of maximum frequency while thermal sensors exceed critical thresholds.",
+		Thresholds:    []string{"scaling_cur_freq < 40.0% of scaling_max_freq", "Thermal zone temp > 85°C"},
+		KernelSources: []string{"/sys/devices/system/cpu/cpu*/cpufreq/", "/sys/class/thermal/thermal_zone*/temp"},
+		Remediation:   "Check cooling fans, airflow, and heat sink seating; clean dust filters.",
+	},
+	"BASE_INODE_EXHAUSTION": {
+		Description:   "A filesystem has exhausted available inodes, preventing file creation even if free disk space remains.",
+		Thresholds:    []string{"Inodes used >= 99.0% or 0 inodes available"},
+		KernelSources: []string{"syscall.Statfs()"},
+		Remediation:   "Delete small temporary files, clean /tmp, or clear directory trees with millions of small files.",
+	},
+	"BASE_IO_SERVICE_LATENCY": {
+		Description:   "Storage device operation latency exceeds 50ms per read or write operation under active load.",
+		Thresholds:    []string{"AvgReadLatencyMS >= 50ms OR AvgWriteLatencyMS >= 50ms", "deltaReads + deltaWrites >= 10"},
+		KernelSources: []string{"/proc/diskstats"},
+		Remediation:   "Inspect SAN/EBS burst credits, tune I/O scheduler, or upgrade provisioned IOPS tier.",
+	},
+	"BASE_TCP_SOCKET_MEM_PRESS": {
+		Description:   "Kernel TCP stack exceeded tcp_mem memory limits, forcing buffer pruning and socket drops.",
+		Thresholds:    []string{"TCPMemoryPressures delta > 0 OR TCPAbortOnMemory delta > 0"},
+		KernelSources: []string{"/proc/net/netstat"},
+		Remediation:   "Raise net.ipv4.tcp_mem thresholds or reduce application socket buffer sizes.",
+	},
+	"BASE_SWAP_DEVICE_SATURATION": {
+		Description:   "System swap device has reached 98% utilization with active swap pagination under low free RAM.",
+		Thresholds:    []string{"Swap used >= 98.0%", "pswpout delta > 0 OR pswpin delta > 0", "MemAvailable < 10.0% MemTotal"},
+		KernelSources: []string{"/proc/meminfo", "/proc/vmstat"},
+		Remediation:   "Add swap capacity (swapfile) or increase host physical memory.",
+	},
+	"BASE_FS_READONLY_REMOUNT": {
+		Description:   "Critical filesystem has been remounted read-only by the kernel due to hardware or journal corruption.",
+		Thresholds:    []string{"Mount Statfs.Flags ST_RDONLY set on /, /tmp, or /var"},
+		KernelSources: []string{"syscall.Statfs()"},
+		Remediation:   "Check dmesg for storage/filesystem errors, back up critical data, and run fsck in rescue mode.",
+	},
+	"BASE_SYSTEM_FILE_TABLE_FULL": {
+		Description:   "System-wide open file table allocation has reached capacity, causing system-wide open() failures.",
+		Thresholds:    []string{"Allocated file handles >= 98.0% of fs.file-max"},
+		KernelSources: []string{"/proc/sys/fs/file-nr"},
+		Remediation:   "Raise sysctl fs.file-max: sysctl -w fs.file-max=2097152.",
+	},
+	"BASE_GLOBAL_OOM_KILL_ACTIVE": {
+		Description:   "Kernel OOM killer invoked globally during sampling window to terminate memory-consuming processes.",
+		Thresholds:    []string{"oom_kill delta > 0 in /proc/vmstat", "MemAvailable < 10.0% of MemTotal"},
+		KernelSources: []string{"/proc/vmstat", "/proc/meminfo"},
+		Remediation:   "Inspect dmesg for OOM victim details, downsize memory footprint, or provision more RAM.",
+	},
+	"BASE_CONNTRACK_TABLE_HARD_DROP": {
+		Description:   "Netfilter connection tracking table is dropping new connections due to hard table exhaustion.",
+		Thresholds:    []string{"nf_conntrack_count >= 99.0% of nf_conntrack_max", "conntrack drop delta > 0"},
+		KernelSources: []string{"/proc/sys/net/netfilter/nf_conntrack_count", "/proc/net/stat/nf_conntrack"},
+		Remediation:   "Increase netfilter table limit: sysctl -w net.netfilter.nf_conntrack_max=1048576.",
+	},
+}
+
 // RuleCPUSaturation detects 100% CPU starvation with an overloaded runqueue.
 type RuleCPUSaturation struct{}
 
@@ -42,6 +123,9 @@ func (r *RuleCPUSaturation) Tier() int            { return 1 }
 func (r *RuleCPUSaturation) IsPIDDependent() bool { return true }
 func (r *RuleCPUSaturation) Suppresses() []string {
 	return []string{"CONT_CONTEXT_SWITCH_STORM", "CONT_SCHED_RUNQUEUE_STARVATION", "CONT_RUNAWAY_CPU_PROCESS"}
+}
+func (r *RuleCPUSaturation) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
 }
 
 func (r *RuleCPUSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
@@ -106,7 +190,10 @@ func (r *RuleOOMDanger) ID() string           { return "BASE_OOM_DANGER" }
 func (r *RuleOOMDanger) Tier() int            { return 1 }
 func (r *RuleOOMDanger) IsPIDDependent() bool { return true }
 func (r *RuleOOMDanger) Suppresses() []string {
-	return []string{"CONT_KSWAPD_CPU_SPIN", "CONT_WORKING_SET_REFAULT_THRASHING", "CONT_SWAP_THRASHING", "CONT_MEMCG_RECLAIM_DIRECT_STALL"}
+	return []string{"CONT_KSWAPD_CPU_SPIN", "CONT_WORKINGSET_REFAULT_THRASHING", "CONT_SWAP_THRASHING", "CONT_MEMCG_RECLAIM_DIRECT_STALL"}
+}
+func (r *RuleOOMDanger) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
 }
 
 func (r *RuleOOMDanger) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
@@ -177,6 +264,9 @@ type RuleDiskSpaceFull struct{ noSuppression }
 func (r *RuleDiskSpaceFull) ID() string           { return "BASE_DISK_SPACE_FULL" }
 func (r *RuleDiskSpaceFull) Tier() int            { return 1 }
 func (r *RuleDiskSpaceFull) IsPIDDependent() bool { return false }
+func (r *RuleDiskSpaceFull) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
+}
 
 func (r *RuleDiskSpaceFull) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -219,7 +309,10 @@ func (r *RuleDiskHWSaturation) ID() string           { return "BASE_DISK_HARDWAR
 func (r *RuleDiskHWSaturation) Tier() int            { return 1 }
 func (r *RuleDiskHWSaturation) IsPIDDependent() bool { return true }
 func (r *RuleDiskHWSaturation) Suppresses() []string {
-	return []string{"CONT_IO_SCHEDULER_QUEUE_LATENCY", "CONT_DSTATE_PILEUP"}
+	return []string{"CONT_IO_QUEUE_LATENCY", "CONT_DSTATE_PILEUP"}
+}
+func (r *RuleDiskHWSaturation) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
 }
 
 func (r *RuleDiskHWSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
@@ -287,6 +380,9 @@ type RuleThermalThrottling struct{ noSuppression }
 func (r *RuleThermalThrottling) ID() string           { return "BASE_THERMAL_THROTTLING" }
 func (r *RuleThermalThrottling) Tier() int            { return 1 }
 func (r *RuleThermalThrottling) IsPIDDependent() bool { return false }
+func (r *RuleThermalThrottling) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
+}
 
 func (r *RuleThermalThrottling) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -336,6 +432,9 @@ type RuleInodeExhaustion struct{ noSuppression }
 func (r *RuleInodeExhaustion) ID() string           { return "BASE_INODE_EXHAUSTION" }
 func (r *RuleInodeExhaustion) Tier() int            { return 1 }
 func (r *RuleInodeExhaustion) IsPIDDependent() bool { return false }
+func (r *RuleInodeExhaustion) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
+}
 
 func (r *RuleInodeExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -377,6 +476,9 @@ type RuleIOServiceLatency struct{ noSuppression }
 func (r *RuleIOServiceLatency) ID() string           { return "BASE_IO_SERVICE_LATENCY" }
 func (r *RuleIOServiceLatency) Tier() int            { return 1 }
 func (r *RuleIOServiceLatency) IsPIDDependent() bool { return false }
+func (r *RuleIOServiceLatency) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
+}
 
 func (r *RuleIOServiceLatency) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || len(diff.Disks) == 0 {
@@ -427,6 +529,9 @@ type RuleTCPSocketMemoryPressure struct{ noSuppression }
 func (r *RuleTCPSocketMemoryPressure) ID() string           { return "BASE_TCP_SOCKET_MEM_PRESS" }
 func (r *RuleTCPSocketMemoryPressure) Tier() int            { return 1 }
 func (r *RuleTCPSocketMemoryPressure) IsPIDDependent() bool { return false }
+func (r *RuleTCPSocketMemoryPressure) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
+}
 
 func (r *RuleTCPSocketMemoryPressure) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -467,6 +572,9 @@ type RuleSwapDeviceSaturation struct{ noSuppression }
 func (r *RuleSwapDeviceSaturation) ID() string           { return "BASE_SWAP_DEVICE_SATURATION" }
 func (r *RuleSwapDeviceSaturation) Tier() int            { return 1 }
 func (r *RuleSwapDeviceSaturation) IsPIDDependent() bool { return false }
+func (r *RuleSwapDeviceSaturation) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
+}
 
 func (r *RuleSwapDeviceSaturation) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -507,6 +615,9 @@ type RuleFSReadOnlyRemount struct{ noSuppression }
 func (r *RuleFSReadOnlyRemount) ID() string           { return "BASE_FS_READONLY_REMOUNT" }
 func (r *RuleFSReadOnlyRemount) Tier() int            { return 1 }
 func (r *RuleFSReadOnlyRemount) IsPIDDependent() bool { return false }
+func (r *RuleFSReadOnlyRemount) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
+}
 
 func (r *RuleFSReadOnlyRemount) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil || diff.LatestSnapshot == nil {
@@ -542,6 +653,9 @@ func (r *RuleSystemFileTableFull) Tier() int            { return 1 }
 func (r *RuleSystemFileTableFull) IsPIDDependent() bool { return false }
 func (r *RuleSystemFileTableFull) Suppresses() []string {
 	return []string{"CONT_FD_EXHAUSTION"}
+}
+func (r *RuleSystemFileTableFull) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
 }
 
 func (r *RuleSystemFileTableFull) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
@@ -583,6 +697,9 @@ func (r *RuleGlobalOOMKillActive) IsPIDDependent() bool { return false }
 func (r *RuleGlobalOOMKillActive) Suppresses() []string {
 	return []string{"BASE_OOM_DANGER", "CONT_KSWAPD_CPU_SPIN"}
 }
+func (r *RuleGlobalOOMKillActive) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
+}
 
 func (r *RuleGlobalOOMKillActive) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
 	if diff == nil {
@@ -619,6 +736,9 @@ func (r *RuleConntrackTableHardDrop) Tier() int            { return 1 }
 func (r *RuleConntrackTableHardDrop) IsPIDDependent() bool { return false }
 func (r *RuleConntrackTableHardDrop) Suppresses() []string {
 	return []string{"CONT_CONNTRACK_EXHAUSTION"}
+}
+func (r *RuleConntrackTableHardDrop) Explain() RuleExplanation {
+	return tier1Explanations[r.ID()]
 }
 
 func (r *RuleConntrackTableHardDrop) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {

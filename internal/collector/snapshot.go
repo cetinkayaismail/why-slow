@@ -10,6 +10,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -149,6 +150,8 @@ type DiskDeviceStat struct {
 	IOTicks         uint64 // Milliseconds spent doing I/O
 	WeightedIOTicks uint64
 	QueueNrRequests uint64
+	Scheduler       string
+	Rotational      bool
 }
 
 // DiskStatsInfo holds per-device disk statistics.
@@ -353,6 +356,17 @@ type SchedStatInfo struct {
 	Ratio              float64
 }
 
+// SlabInfo holds kernel slab memory allocation counters parsed from /proc/slabinfo.
+type SlabInfo struct {
+	Available         bool   `json:"available"`
+	DentryCacheActive uint64 `json:"dentry_cache_active"`
+	DentryCacheTotal  uint64 `json:"dentry_cache_total"`
+	InodeCacheActive  uint64 `json:"inode_cache_active"`
+	InodeCacheTotal   uint64 `json:"inode_cache_total"`
+	TaskStructActive  uint64 `json:"task_struct_active"`
+	TaskStructTotal   uint64 `json:"task_struct_total"`
+}
+
 // SystemConfigInfo holds global kernel configuration limits, enterprise sysctls, and socket counts.
 type SystemConfigInfo struct {
 	PIDMax               uint64
@@ -380,6 +394,7 @@ type SystemConfigInfo struct {
 	THPDefragMode        string
 	ThreadsMax           uint64
 	FileNR               FileNRInfo
+	Slab                 SlabInfo
 }
 
 // FileNRInfo holds system-wide open file table allocation counters from /proc/sys/fs/file-nr.
@@ -436,6 +451,18 @@ type NetIfaceStat struct {
 	RxFIFOErrors    uint64
 }
 
+// SmapsRollupInfo holds per-process memory and swap metrics from /proc/[pid]/smaps_rollup.
+type SmapsRollupInfo struct {
+	Available    bool   `json:"available"`
+	RSS          uint64 `json:"rss_kb"`
+	PSS          uint64 `json:"pss_kb"`
+	Swap         uint64 `json:"swap_kb"`
+	SharedClean  uint64 `json:"shared_clean_kb"`
+	SharedDirty  uint64 `json:"shared_dirty_kb"`
+	PrivateClean uint64 `json:"private_clean_kb"`
+	PrivateDirty uint64 `json:"private_dirty_kb"`
+}
+
 // ProcessInfo holds snapshot metrics for a single PID.
 type ProcessInfo struct {
 	PID                      int
@@ -447,6 +474,7 @@ type ProcessInfo struct {
 	NumThreads               int
 	RSSBytes                 uint64
 	OOMScore                 int
+	OOMScoreAdj              int
 	Wchan                    string
 	ReadBytes                uint64
 	WriteBytes               uint64
@@ -462,6 +490,7 @@ type ProcessInfo struct {
 	VoluntaryCtxtSwitches    uint64
 	NonvoluntaryCtxtSwitches uint64
 	Partial                  bool
+	SmapsRollup              SmapsRollupInfo
 }
 
 // CgroupEntry holds throttling, memory.events, and resource statistics for a cgroup.
@@ -527,6 +556,7 @@ type ProcessDiff struct {
 	NumThreads                    int
 	RSSBytes                      uint64
 	OOMScore                      int
+	OOMScoreAdj                   int
 	Wchan                         string
 	CPUTimeDelta                  uint64 // (utime + stime) delta in jiffies
 	CPUPercent                    float64
@@ -544,6 +574,7 @@ type ProcessDiff struct {
 	SigQRatio                     float64
 	VoluntaryCtxtSwitchesDelta    uint64
 	NonvoluntaryCtxtSwitchesDelta uint64
+	SmapsRollup                   SmapsRollupInfo
 }
 
 // DiskDeviceDiff represents computed I/O utilization, throughput, and service latency deltas for a block device.
@@ -560,6 +591,8 @@ type DiskDeviceDiff struct {
 	WeightedIOTicksDelta uint64
 	AvgQueueLatencyMS    float64
 	QueueNrRequests      uint64
+	Scheduler            string
+	Rotational           bool
 }
 
 // VMStatDiff represents delta counters for memory events over the sampling window.
@@ -684,8 +717,9 @@ func CollectSnapshot(ctx context.Context) (*SystemSnapshot, error) {
 		Timestamp: time.Now(),
 	}
 
-	var err error
+	// 1. Sequential coherence batch: CPU + VMStat + PSI + Memory
 	snap.PSI, _ = CollectPSI()
+	var err error
 	snap.CPU, err = CollectCPUStat()
 	if err != nil {
 		return nil, fmt.Errorf("collector: snapshot cpu: %w", err)
@@ -695,27 +729,53 @@ func CollectSnapshot(ctx context.Context) (*SystemSnapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("collector: snapshot memory: %w", err)
 	}
-
 	snap.VMStat, _ = CollectVMStat()
-	snap.DiskStats, _ = CollectDiskStats()
-	snap.DiskSpace, _ = CollectDiskSpace()
-	snap.CPUFreq, _ = CollectCPUFreq()
-	snap.Thermal, _ = CollectThermal()
-	snap.Clocksource, _ = CollectClocksource()
-	snap.NetStat, _ = CollectNetStat()
-	snap.NetIfaces, _ = CollectNetIfaces()
-	snap.SystemConfig, _ = CollectSystemConfig()
-	snap.LoadAvg, _ = CollectLoadAvg()
-	snap.TCPSockets, _ = CollectTCPSockets()
-	snap.VMConfig, _ = CollectVMConfig()
 
-	// Parallel process collection via worker pool
+	// 2. Parallel independent collectors
+	collectParallelIndependent(ctx, snap)
+
+	// 3. Sequential process & cgroup collection
 	snap.Processes, _ = CollectProcesses(ctx)
-
-	// Cgroups parsed using the discovered process cgroup memberships
 	snap.Cgroups, _ = CollectCgroups(snap.Processes)
 
 	return snap, nil
+}
+
+func collectParallelIndependent(ctx context.Context, snap *SystemSnapshot) {
+	var wg sync.WaitGroup
+	run := func(task func() func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer cancel()
+			done := make(chan func(), 1)
+			go func() {
+				done <- task()
+			}()
+			select {
+			case apply := <-done:
+				if apply != nil {
+					apply()
+				}
+			case <-cCtx.Done():
+			}
+		}()
+	}
+
+	run(func() func() { res, _ := CollectDiskStats(); return func() { snap.DiskStats = res } })
+	run(func() func() { res, _ := CollectDiskSpace(); return func() { snap.DiskSpace = res } })
+	run(func() func() { res, _ := CollectCPUFreq(); return func() { snap.CPUFreq = res } })
+	run(func() func() { res, _ := CollectThermal(); return func() { snap.Thermal = res } })
+	run(func() func() { res, _ := CollectClocksource(); return func() { snap.Clocksource = res } })
+	run(func() func() { res, _ := CollectNetStat(); return func() { snap.NetStat = res } })
+	run(func() func() { res, _ := CollectNetIfaces(); return func() { snap.NetIfaces = res } })
+	run(func() func() { res, _ := CollectSystemConfig(); return func() { snap.SystemConfig = res } })
+	run(func() func() { res, _ := CollectLoadAvg(); return func() { snap.LoadAvg = res } })
+	run(func() func() { res, _ := CollectTCPSockets(); return func() { snap.TCPSockets = res } })
+	run(func() func() { res, _ := CollectVMConfig(); return func() { snap.VMConfig = res } })
+
+	wg.Wait()
 }
 
 // DiffSnapshots calculates rate and counter differentials between two snapshots.
@@ -847,6 +907,8 @@ func calculateDiskDiff(aDevs, bDevs []DiskDeviceStat, duration time.Duration) []
 			WeightedIOTicksDelta: deltaWeightedTicks,
 			AvgQueueLatencyMS:    avgQueueLatencyMS,
 			QueueNrRequests:      b.QueueNrRequests,
+			Scheduler:            b.Scheduler,
+			Rotational:           b.Rotational,
 		})
 	}
 	return result
@@ -1038,6 +1100,7 @@ func calculateProcessDiff(aProcs, bProcs []ProcessInfo, duration time.Duration) 
 			NumThreads:                    b.NumThreads,
 			RSSBytes:                      b.RSSBytes,
 			OOMScore:                      b.OOMScore,
+			OOMScoreAdj:                   b.OOMScoreAdj,
 			Wchan:                         b.Wchan,
 			CPUTimeDelta:                  cpuDelta,
 			CPUPercent:                    cpuPercent,
@@ -1055,6 +1118,7 @@ func calculateProcessDiff(aProcs, bProcs []ProcessInfo, duration time.Duration) 
 			SigQRatio:                     sigQRatio,
 			VoluntaryCtxtSwitchesDelta:    volCtxDelta,
 			NonvoluntaryCtxtSwitchesDelta: nonVolCtxDelta,
+			SmapsRollup:                   b.SmapsRollup,
 		})
 	}
 	return result

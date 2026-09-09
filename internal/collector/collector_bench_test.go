@@ -1,6 +1,7 @@
 package collector_test
 
 import (
+	"context"
 	"testing"
 	"time"
 	"why-slow/internal/collector"
@@ -51,5 +52,15 @@ func BenchmarkCollector_DiffSnapshots(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		_ = collector.DiffSnapshots(snapA, snapB)
+	}
+}
+
+func BenchmarkCollectSnapshot(b *testing.B) {
+	ctx := context.Background()
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_, _ = collector.CollectSnapshot(ctx)
 	}
 }

@@ -118,3 +118,25 @@ func TestLiveHostDiskCollectors(t *testing.T) {
 			m.Path, m.UsedPercent, m.TotalBytes/(1024*1024*1024), m.AvailBytes/(1024*1024*1024))
 	}
 }
+
+func TestParseActiveScheduler(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"[mq-deadline] none bfq", "mq-deadline"},
+		{"none [mq-deadline] kyber bfq", "mq-deadline"},
+		{"none mq-deadline [bfq]", "bfq"},
+		{"[none]", "none"},
+		{"none", ""},
+		{"", ""},
+		{"[kyber] ", "kyber"},
+	}
+
+	for _, tc := range tests {
+		got := ParseActiveScheduler(tc.input)
+		if got != tc.expected {
+			t.Errorf("ParseActiveScheduler(%q) = %q; want %q", tc.input, got, tc.expected)
+		}
+	}
+}

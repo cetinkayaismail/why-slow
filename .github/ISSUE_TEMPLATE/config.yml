@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Architectural & Operational Documentation
+    url: https://github.com/cetinkayaismail/why-slow/tree/main/docs
+    about: Read our comprehensive architecture, runbooks, and 160+ diagnostic rules catalog.
+  - name: 💬 Community Discussions
+    url: https://github.com/cetinkayaismail/why-slow/discussions
+    about: Ask questions, discuss Linux kernel metrics, or share usage workflows.
+  - name: 🔒 Report a Security Vulnerability
+    url: https://github.com/cetinkayaismail/why-slow/security/advisories/new
+    about: Privately report a security issue or invariant bypass.

@@ -3,6 +3,143 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.26.0] - 2026-09-09
+
+### Removed
+- **TUI Package (`internal/presenter/tui/`)**:
+  - Completely removed the 15-file TUI package and dropped `-i` / `--tui` CLI flags.
+  - Eliminated full-screen curses/terminal-raw mode, preventing scrollback buffer clearing and terminal state issues over SSH.
+  - Re-anchored the tool strictly on standard UNIX composability (stdout/stderr piping, redirection, and clean scrollback retention).
+  - Reduced binary size down to 3.2 MB.
+
+### Added
+- **Open-Source & GitHub Community Health Infrastructure**:
+  - `SECURITY.md`: Enterprise-grade vulnerability disclosure policy, incident response SLAs, and formalization of zero-write and read-only invariants.
+  - `CONTRIBUTING.md`: Detailed developer onboarding guide covering local setup, test execution, coding standards (<= 60 lines per function), and step-by-step diagnostic rule authoring.
+  - `CODE_OF_CONDUCT.md`: Contributor Covenant v2.1 code of conduct for inclusive community interactions.
+  - GitHub Issue Forms (`.github/ISSUE_TEMPLATE/`): Structured `bug_report.yml`, `rule_proposal.yml`, and `config.yml` templates.
+  - Pull Request Template (`.github/PULL_REQUEST_TEMPLATE.md`): Contributor self-verification checklist for zero dependencies, zero writes, and race tests.
+  - GitHub Actions CI/CD Workflows (`.github/workflows/`): Automated multi-version Go testing (`ci.yml`) across Go 1.22/1.23/1.24 and automated static binary releases (`release.yml`) for `linux/amd64` and `linux/arm64`.
+
+### Changed
+- **Default Observation Window (3-Second Sampling)**:
+  - Upgraded the default sampling window from 1s to **3 seconds** (`--interval 3s`), eliminating the 1-second blindspot for writeback flush spikes, ephemeral process churn, and momentary jitter.
+  - Added an interactive single-line progress indicator on `os.Stderr` (`Sampling system telemetry (3.0s window)...`) that cleanly erases when rendering the card.
+  - 100% clean stdout preserved for `--json` and UNIX pipeline redirects.
+
+## [0.25.0] - 2026-09-09
+
+### Changed
+- **Diagnosis-First Terminal Presentation (Option 2 & Option 3)**:
+  - Transformed the primary blocker card into a forensic diagnostic card with elevated scientific authority.
+  - Replaced `"Primary Cause:"` with `"Diagnostic Finding:"`.
+  - Replaced `"Kernel Evidence:"` with `"Diagnostic Proof:"`.
+  - Added dedicated header banner displaying `Rule ID`, `Tier Name`, and `Confidence %` directly on the primary card.
+- **Opt-In Remediation (`--remedy` / `-r`)**:
+  - By default, `why-slow` focuses 100% on pure diagnosis, omitting the verbose remediation block and showing a subtle footer tip: `(Tip: Run with --remedy to view system remediation advice)`.
+  - Added `--remedy` and `-r` CLI flags to display actionable tuning & remediation commands on demand.
+  - Retained the `"remediation"` field in `--json` and `why-slow --explain <RULE_ID>` for API integrations and documentation lookups.
+
+### Added
+- **Standalone Scenario Simulation Runner (`demo/run.sh`)**:
+  - Added safe, non-destructive simulation runner with an interactive ANSI menu and flags (`--zombie`, `--fd`, `--cpu`, `--mem`, `--dstate`, `--all`).
+  - Hardcoded 15-second self-destruct timers and `trap cleanup EXIT INT TERM` ensuring 100% workstation safety and zero lingering processes.
+  - Added [`demo/README.md`](demo/README.md) and linked it in the root `README.md`.
+
+## [0.24.0] - 2026-09-09
+
+### Fixed
+- **Subsystem Calibration False-Positive / False-Negative Resolution**:
+  - Replaced broad substring matching (`strings.Contains(id, "IO")`) in `internal/analyzer/engine.go` with exact token-boundary matching (`hasRuleToken(id, "IO")`).
+  - Previously, all rules featuring English words with the `-TION` suffix (`BASE_CPU_SATURATION`, `CONT_SCHED_RUNQUEUE_STARVATION`, `CONT_FD_EXHAUSTION`, `CONT_CONNTRACK_EXHAUSTION`, etc.) were misclassified as I/O rules and erroneously slashed by 30% when disk I/O was idle.
+  - Excluded `KSWAPD` from CPU rules so kernel swap daemon spin is calibrated specifically against Memory PSI.
+  - Verified mutually exclusive classification across all 164 rules.
+- **Causal Suppression Shadowing Typos**:
+  - Corrected `BASE_OOM_DANGER`: fixed suppression string to `CONT_WORKINGSET_REFAULT_THRASHING`.
+  - Corrected `BASE_DISK_HARDWARE_SATURATION`: fixed suppression string to `CONT_IO_QUEUE_LATENCY`.
+  - Corrected `CONT_TCP_LISTEN_DROPS`: fixed suppression string to `CONT_TCP_SYN_QUEUE_OVERFLOW`.
+
+### Added
+- **Exhaustive Automated Test and Audit Suite (`audit_test.go`)**:
+  - `TestExhaustiveRuleAudit`: verifies all 164 diagnostic rules (13 Tier 1, 86 Tier 2, 65 Tier 3) are active, have valid tiers, non-empty explainers, and valid suppression targets.
+  - `TestCalibrationCategorizationAudit`: ensures no diagnostic rule is cross-contaminated across multiple PSI calibration categories.
+  - `TestExhaustiveRuleEvaluationSafety`: evaluates all 164 rules against edge cases including nil snapshots, zero `MemTotal`, zero duration, and counter wrap-around deltas, confirming zero panics and zero divisions by zero.
+  - `TestExhaustiveNoFalsePositivesOnHealthyBaseline`: evaluates all 164 rules on a healthy system baseline, verifying zero false positive activations.
+
+### Changed
+- **Knowledge Graph Synchronization**:
+  - Regenerated Graphify knowledge graph (`graphify . --code-only` and `graphify cluster-only .`), mapping 1,717 nodes, 3,827 edges, and 172 communities.
+
+## [0.23.0] - 2026-09-09
+
+### Added
+- **Single-Process Deep Dive Mode (`--pid PID`)**:
+  - Added `--pid` CLI flag for targeted diagnostic inspection of a specific process.
+  - Validates process existence via `/proc/[pid]/stat` prior to snapshot collection, failing cleanly if the PID is invalid or has exited.
+  - Enriches target PID with comprehensive telemetry: CPU%, RSS, Swap, I/O throughput deltas, limits, Wchan, Cgroup, and OOM score.
+  - Implemented safe descriptor classification (`CountProcessFDTypes`) counting open FDs by kernel type (regular files, sockets, pipes, anon inodes) while strictly discarding destination paths for privacy (Gate 4 compliance).
+  - Renders a stylized terminal card (`Process Deep Dive: PID 12345 (nginx)`) and exports `"pid_focus"` structured object in `--json` mode.
+  - Correlates and highlights all diagnostic findings associated with the target process (`related_issues`).
+- **Per-Process Swap Attribution (`/proc/[pid]/smaps_rollup`)**:
+  - Probes `/proc/self/smaps_rollup` at startup to verify kernel compatibility (requires kernel ≥ 4.14), gracefully bypassing on older kernels.
+  - Performs a bounded second-pass enrichment on the top 50 processes sorted by RSS, collecting PSS, RSS, Swap, and shared/private dirty memory without exceeding the snapshot budget.
+  - Added `CONT_PROCESS_SWAP_PINNED` (Tier 2, High) rule triggered when a process has > 500MB swapped out during elevated system memory pressure (`MemAvailable < 20% MemTotal` or `PswpinDelta > 0`).
+- **Kernel Slab Allocation Collection (`/proc/slabinfo`)**:
+  - Implemented zero-dependency streaming parser (`ParseSlabInfo`) for `/proc/slabinfo` v2.1 using `bufio.Scanner`.
+  - Extracts active and total object counters for `dentry`, `inode_cache`, `ext4_inode_cache`, and `task_struct`.
+  - Root-only access handled gracefully: non-root users encounter silent degradation (`Available: false`).
+  - Added `CONT_DENTRY_CACHE_EXPLOSION` (Tier 2, High) rule diagnosing dentry slab bloat (> 2,000,000 active objects) under memory pressure.
+- **Dynamic Diagnostic Confidence Calibration (PSI Engine Enhancement)**:
+  - Augmented correlation engine with Linux Pressure Stall Information (PSI) calibration before ranking findings.
+  - Corroborating pressure (`avg10 > 20%`) applies a 1.10× confidence boost to memory-, I/O-, or CPU-related findings.
+  - Contradictory pressure (`avg10 < 1%`) applies a 0.70× confidence penalty to prevent false alarms.
+  - Strict mathematical clamping guarantees confidence scores remain within `[0.0, 1.0]`.
+  - Fully backward compatible: operations cleanly no-op when PSI is unavailable, exposing `"calibrated": true/false` in reports.
+
+## [0.22.0] - 2026-09-09
+
+### Added
+- **Top N Processes Inspection (`--top N`)**:
+  - Appends a high-visibility Top N Processes table to terminal output sorted by `CPUPercent DESC`, using `RSSBytes DESC` as tiebreaker.
+  - Displays PID, COMM, CPU%, RSS(MB), ReadΔ(KB), WriteΔ(KB), Open FDs, and kernel scheduling State.
+  - Serializes `top_processes` array in `--json` mode for APM/SIEM collectors.
+  - In `--watch` mode, Top N table is conditionally rendered when alert thresholds are met.
+  - Validates positive integer values, rejecting 0 or negative inputs with clear error diagnostics.
+- **Diagnostic Rule Documentation & Discovery (`--explain RULE_ID`, `--list-rules`)**:
+  - Added `Explain() RuleExplanation` across all 162 diagnostic rules in Tiers 1, 2, and 3.
+  - `--explain RULE_ID` outputs structured documentation including trigger thresholds, kernel telemetry procfs/sysfs sources, and actionable remediation commands without running a live scan.
+  - Unknown rule IDs trigger immediate failure with suggestions to run `--list-rules`.
+  - Redesigned `--list-rules` with a stylized card layout featuring bold rule IDs, colored subsystem badges (`[CPU]`, `[Memory]`, `[Storage]`, `[Network]`, `[Cgroup]`, `[Process]`, `[Kernel]`), word-wrapped indented descriptions, and an executive summary header.
+  - Added instant keyword and subsystem filtering to `--list-rules` (e.g. `why-slow --list-rules cgroup`, `why-slow --list-rules cpu`, `why-slow --list-rules tier1`).
+- **Rule Suppression Filtering (`--disable-rules`)**:
+  - Supports comma-separated list of rule IDs to bypass during analysis.
+  - Validates all provided rule IDs against the registry at startup.
+  - Emits explicit warnings to stderr when disabling critical Tier 1 rules.
+  - Reflects active disabled rules in the structured JSON payload via `"disabled_rules": [...]`.
+- **I/O Scheduler & Rotational Detection**:
+  - Collects active scheduler from `/sys/block/*/queue/scheduler` and rotational status from `/sys/block/*/queue/rotational`.
+  - Added `EDGE_IO_SCHEDULER_MISMATCH` rule in Tier 3 detecting misconfigured schedulers (e.g. SSD with `bfq` or rotational HDD with `none`) suffering measurable queue latency (> 20ms).
+  - Gracefully degrades when sysfs block queue nodes are absent or restricted.
+- **OOM Score Adjustment Collection & Immune Memory Hog Rule**:
+  - Reads `/proc/[pid]/oom_score_adj` alongside standard `oom_score`.
+  - Added `EDGE_OOM_IMMUNE_MEMORY_HOG` rule in Tier 3 detecting rogue non-whitelisted processes configured with `oom_score_adj = -1000` consuming > 30% of system RAM during memory pressure (< 15% available).
+  - Whitelists critical Linux infrastructure daemons (`systemd`, `init`, `sshd`, `kubelet`, `containerd`, `dockerd`, `journald`).
+
+### Optimized
+- **Parallel Sequential Snapshot Collectors**:
+  - Parallelized 11 independent procfs and sysfs collectors in `CollectSnapshot()` using `sync.WaitGroup` with a 500ms timeout per collector to protect against hung mounts.
+  - Retained strict sequential micro-batch for `CPUStat`, `MemInfo`, `VMStat`, and `PSI` to preserve jiffie coherence.
+  - Achieved ~21.7% snapshot collection speedup (from ~35.5ms down to ~27.8ms).
+- **Median Diff Completeness Fix**:
+  - Implemented statistical medians across sampling windows for `PerCoreCPUUtil`, `Disks` (utilization, read/write latency, throughput), and `Cgroups` (throttling deltas) using intersection-based matching.
+- **Process Collector Allocation Elimination**:
+  - Eliminated repetitive heap allocations in `ScanProcesses()` by allocating a worker-local 4KB buffer per goroutine and using `os.Open` + `file.Read` with automatic fallback for oversized files.
+  - Reduced snapshot memory allocations by ~27.3% (from ~10.7MB down to ~7.78MB, eliminating ~5,400 allocations per snapshot).
+- **Early-Exit Rule Evaluation**:
+  - Added early-exit optimization in `Engine.Analyze()` skipping Tier 3 edge-case evaluations when a Tier 1 root cause triggers with `Confidence >= 0.90`.
+  - Exposed `"tier3_evaluated": true/false` flag in JSON diagnostic report.
+  - Improved diagnostic engine analysis latency by ~17.9%.
+
 ## [0.21.0] - 2026-09-02
 
 ### Added

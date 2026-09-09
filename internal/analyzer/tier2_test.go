@@ -2774,3 +2774,200 @@ func TestRuleRunawayCPUProcess(t *testing.T) {
 		t.Fatalf("expected RuleRunawayCPUProcess not to trigger on 45%% CPU")
 	}
 }
+
+func TestRuleProcessSwapPinned(t *testing.T) {
+	rule := &RuleProcessSwapPinned{}
+
+	// Positive test: swap > 500MB and MemAvailable < 20%
+	diffMemPressure := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:  501,
+				Comm: "python_hog",
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available: true,
+					Swap:      600000, // 600,000 KB > 512,000 KB
+				},
+			},
+		},
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{
+				MemTotal:     10000000,
+				MemAvailable: 1500000, // 15% < 20%
+			},
+		},
+	}
+	diag, ok := rule.Evaluate(diffMemPressure)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleProcessSwapPinned to trigger on 600MB swap + 15%% MemAvailable")
+	}
+	if diag.CulpritPID != 501 || diag.CulpritName != "python_hog" {
+		t.Errorf("expected culprit PID 501 python_hog, got %d %s", diag.CulpritPID, diag.CulpritName)
+	}
+	if diag.Confidence != 0.85 {
+		t.Errorf("expected confidence 0.85, got %f", diag.Confidence)
+	}
+	if diag.Severity != SeverityHigh {
+		t.Errorf("expected SeverityHigh, got %s", diag.Severity)
+	}
+
+	// Positive test 2: swap > 500MB and PswpinDelta > 0
+	diffSwapIn := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:  502,
+				Comm: "java_app",
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available: true,
+					Swap:      550000,
+				},
+			},
+		},
+		VMStat: collector.VMStatDiff{
+			PswpinDelta: 120,
+		},
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{
+				MemTotal:     10000000,
+				MemAvailable: 5000000, // 50%
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffSwapIn); !ok {
+		t.Fatalf("expected RuleProcessSwapPinned to trigger when PswpinDelta > 0")
+	}
+
+	// Negative test 1: swap <= 500MB
+	diffLowSwap := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:  503,
+				Comm: "small_app",
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available: true,
+					Swap:      100000, // 100MB
+				},
+			},
+		},
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{
+				MemTotal:     10000000,
+				MemAvailable: 1000000,
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffLowSwap); ok {
+		t.Fatalf("expected RuleProcessSwapPinned not to trigger on 100MB swap")
+	}
+
+	// Negative test 2: swap > 500MB but no memory pressure and pswpin == 0
+	diffNoPressure := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:  504,
+				Comm: "idle_daemon",
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available: true,
+					Swap:      700000,
+				},
+			},
+		},
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{
+				MemTotal:     10000000,
+				MemAvailable: 6000000, // 60% available
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffNoPressure); ok {
+		t.Fatalf("expected RuleProcessSwapPinned not to trigger when memory is healthy and pswpin is 0")
+	}
+}
+
+func TestRuleDentryCacheExplosion(t *testing.T) {
+	rule := &RuleDentryCacheExplosion{}
+
+	// Positive test: DentryCacheActive > 2,000,000 and MemAvailable < 20%
+	diffPos := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			SystemConfig: collector.SystemConfigInfo{
+				Slab: collector.SlabInfo{
+					Available:         true,
+					DentryCacheActive: 2500000,
+					DentryCacheTotal:  2600000,
+				},
+			},
+			Memory: collector.MemInfo{
+				MemTotal:     16000000,
+				MemAvailable: 2000000, // 12.5% < 20%
+			},
+		},
+	}
+	diag, ok := rule.Evaluate(diffPos)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleDentryCacheExplosion to trigger")
+	}
+	if diag.Confidence != 0.75 {
+		t.Errorf("expected confidence 0.75, got %f", diag.Confidence)
+	}
+	if diag.Severity != SeverityHigh {
+		t.Errorf("expected SeverityHigh, got %s", diag.Severity)
+	}
+
+	// Negative test 1: DentryCacheActive <= 2,000,000
+	diffLowDentry := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			SystemConfig: collector.SystemConfigInfo{
+				Slab: collector.SlabInfo{
+					Available:         true,
+					DentryCacheActive: 1500000,
+					DentryCacheTotal:  1600000,
+				},
+			},
+			Memory: collector.MemInfo{
+				MemTotal:     16000000,
+				MemAvailable: 2000000,
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffLowDentry); ok {
+		t.Fatalf("expected RuleDentryCacheExplosion not to trigger on 1.5M dentries")
+	}
+
+	// Negative test 2: DentryCacheActive > 2M but MemAvailable >= 20%
+	diffPlentyMem := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			SystemConfig: collector.SystemConfigInfo{
+				Slab: collector.SlabInfo{
+					Available:         true,
+					DentryCacheActive: 3000000,
+					DentryCacheTotal:  3100000,
+				},
+			},
+			Memory: collector.MemInfo{
+				MemTotal:     16000000,
+				MemAvailable: 8000000, // 50%
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffPlentyMem); ok {
+		t.Fatalf("expected RuleDentryCacheExplosion not to trigger with 50%% MemAvailable")
+	}
+
+	// Negative test 3: Slab unavailable
+	diffNoSlab := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			SystemConfig: collector.SystemConfigInfo{
+				Slab: collector.SlabInfo{Available: false},
+			},
+			Memory: collector.MemInfo{
+				MemTotal:     16000000,
+				MemAvailable: 2000000,
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffNoSlab); ok {
+		t.Fatalf("expected RuleDentryCacheExplosion not to trigger when slab is unavailable")
+	}
+}
+

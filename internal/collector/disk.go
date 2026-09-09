@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 // Default paths for disk statistics and critical mount inspection.
 const (
 	DefaultProcDiskStatsPath = "/proc/diskstats"
+	DefaultSysBlockPath      = "/sys/block"
 )
 
 // DefaultMountPaths defines standard Linux mount points inspected for disk exhaustion.
@@ -28,6 +30,11 @@ func CollectDiskStats() (DiskStatsInfo, error) {
 
 // ParseDiskStats parses block device metrics from a custom diskstats file path.
 func ParseDiskStats(path string) (DiskStatsInfo, error) {
+	return ParseDiskStatsWithSysfs(path, DefaultSysBlockPath)
+}
+
+// ParseDiskStatsWithSysfs parses block device metrics with custom diskstats and sysfs paths.
+func ParseDiskStatsWithSysfs(path, sysBlockPath string) (DiskStatsInfo, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return DiskStatsInfo{}, fmt.Errorf("collector: open diskstats: %w", err)
@@ -51,6 +58,7 @@ func ParseDiskStats(path string) (DiskStatsInfo, error) {
 		}
 
 		stat := parseDiskDeviceFields(devName, fields[3:])
+		stat.Scheduler, stat.Rotational = readBlockDeviceQueueInfo(sysBlockPath, devName)
 		info.Devices = append(info.Devices, stat)
 	}
 
@@ -59,6 +67,39 @@ func ParseDiskStats(path string) (DiskStatsInfo, error) {
 	}
 
 	return info, nil
+}
+
+// ParseActiveScheduler extracts the currently active I/O scheduler from sysfs output.
+// Sysfs formats scheduler options like: "[mq-deadline] none bfq" or "none [mq-deadline] bfq".
+// The active scheduler is enclosed in square brackets.
+func ParseActiveScheduler(content string) string {
+	start := strings.IndexByte(content, '[')
+	if start == -1 {
+		return ""
+	}
+	end := strings.IndexByte(content[start+1:], ']')
+	if end == -1 {
+		return ""
+	}
+	return strings.TrimSpace(content[start+1 : start+1+end])
+}
+
+// readBlockDeviceQueueInfo reads /sys/block/<devName>/queue/scheduler and /sys/block/<devName>/queue/rotational.
+// Graceful degradation: if files are missing or inaccessible, returns empty scheduler and false rotational.
+func readBlockDeviceQueueInfo(sysBlockPath, devName string) (string, bool) {
+	queueDir := filepath.Join(sysBlockPath, devName, "queue")
+
+	var scheduler string
+	if schedBytes, err := os.ReadFile(filepath.Join(queueDir, "scheduler")); err == nil {
+		scheduler = ParseActiveScheduler(string(schedBytes))
+	}
+
+	var rotational bool
+	if rotBytes, err := os.ReadFile(filepath.Join(queueDir, "rotational")); err == nil {
+		rotational = strings.TrimSpace(string(rotBytes)) == "1"
+	}
+
+	return scheduler, rotational
 }
 
 // isRealBlockDevice filters out pseudo, RAM, and CD devices while retaining physical drives, dm mapper, and loop devices.

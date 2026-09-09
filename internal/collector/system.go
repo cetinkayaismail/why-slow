@@ -49,6 +49,7 @@ const (
 	DefaultMDStatPath               = "/proc/mdstat"
 	DefaultTHPDefragPath            = "/sys/kernel/mm/transparent_hugepage/defrag"
 	DefaultSysNetDir                = "/sys/class/net"
+	DefaultSlabInfoPath             = "/proc/slabinfo"
 )
 
 // CollectSystemConfig collects kernel configuration parameters, sysctls, and enterprise topologies.
@@ -81,6 +82,7 @@ func CollectSystemConfig() (SystemConfigInfo, error) {
 	info.THPDefragMode, _ = ParseTHPDefrag(DefaultTHPDefragPath)
 	info.ThreadsMax, _ = ParseThreadsMax(DefaultThreadsMaxPath)
 	info.FileNR, _ = ParseFileNR(DefaultFileNRPath)
+	info.Slab, _ = ParseSlabInfo(DefaultSlabInfoPath)
 	return info, err
 }
 
@@ -1072,4 +1074,58 @@ func ParseFileNR(path string) (FileNRInfo, error) {
 		Unused:    unused,
 		Max:       maxF,
 	}, nil
+}
+
+// ParseSlabInfo parses kernel slab memory allocation counters from /proc/slabinfo (v2.1).
+func ParseSlabInfo(path string) (SlabInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return SlabInfo{Available: false}, nil
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	if !scanner.Scan() {
+		return SlabInfo{Available: false}, nil
+	}
+
+	header := scanner.Text()
+	if !strings.HasPrefix(header, "slabinfo - version: 2.1") {
+		return SlabInfo{Available: false}, nil
+	}
+
+	var info SlabInfo
+	info.Available = true
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+
+		name := fields[0]
+		activeObjs, err1 := strconv.ParseUint(fields[1], 10, 64)
+		numObjs, err2 := strconv.ParseUint(fields[2], 10, 64)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+
+		switch name {
+		case "dentry":
+			info.DentryCacheActive = activeObjs
+			info.DentryCacheTotal = numObjs
+		case "inode_cache", "ext4_inode_cache":
+			info.InodeCacheActive += activeObjs
+			info.InodeCacheTotal += numObjs
+		case "task_struct":
+			info.TaskStructActive = activeObjs
+			info.TaskStructTotal = numObjs
+		}
+	}
+
+	return info, nil
 }

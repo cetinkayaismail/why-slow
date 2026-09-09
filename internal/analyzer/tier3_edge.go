@@ -84,13 +84,751 @@ func GetTier3Rules() []Rule {
 		&RuleNetTCPSynFloodDrop{},
 		&RuleSysfsPowerThrottleEvent{},
 		&RuleProcZombieParentDeadlock{},
+		&RuleIOSchedulerMismatch{},
+		&RuleOOMImmuneMemoryHog{},
 	}
+}
+
+var tier3Explanations = map[string]RuleExplanation{
+	"EDGE_THP_COMPACTION_STALL": {
+		Description: "Kernel freezes the system for hundreds of milliseconds defragmenting RAM to create 2MB huge pages.",
+		Thresholds: []string{
+			"`compact_stall` delta > 0 from `/proc/vmstat`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Change THP defrag mode: echo madvise > /sys/kernel/mm/transparent_hugepage/defrag or disable THP.",
+	},
+	"EDGE_PTY_STDOUT_LOCK": {
+		Description: "A process stopped running because its terminal output buffer is full and nobody is reading it.",
+		Thresholds: []string{
+			"Process state `S` with wchan = `n_tty_write` or `pty_write`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Redirect verbose command output to a file (/tmp/out.log) or discard stdout (> /dev/null).",
+	},
+	"EDGE_HPET_CLOCKSOURCE_DEGRADE": {
+		Description: "System time calls (`gettimeofday`, `clock_gettime`) are 10-100× slower than normal.",
+		Thresholds: []string{
+			"`/sys/devices/system/clocksource/clocksource0/current_clocksource` ≠ `tsc`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Inspect dmesg for TSC desynchronization errors and configure kernel boot parameter 'clocksource=tsc'.",
+	},
+	"EDGE_CGROUP_DIRTY_THROTTLE": {
+		Description: "Process is forced to sleep while kernel flushes dirty pages to disk because the cgroup's dirty memory limit was exceeded.",
+		Thresholds: []string{
+			"Any PID with wchan = `balance_dirty_pages`.",
+		},
+		KernelSources: []string{
+			"/sys/fs/cgroup/",
+		},
+		Remediation: "Tune sysctl vm.dirty_ratio / vm.dirty_background_ratio or accelerate underlying disk flush bandwidth.",
+	},
+	"EDGE_FUTEX_CONTENTION": {
+		Description: "Hundreds of threads are fighting over the same mutex lock, serializing a parallel application.",
+		Thresholds: []string{
+			"PID with > 50 threads AND wchan matches `futex_wait_queue_me` or `do_futex`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Profile lock contention (perf / go pprof mutex) or reduce concurrent worker thread pool size.",
+	},
+	"EDGE_NUMA_REMOTE_THRASHING": {
+		Description: "Applications are suffering 30-50% memory access latency overhead due to cross-socket NUMA remote node memory allocations.",
+		Thresholds: []string{
+			"`numa_miss` delta > 5000 and `numa_foreign` delta > 5000 in `/proc/vmstat`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`numactl --cpunodebind=0 --membind=0 <cmd>` or `sysctl -w vm.zone_reclaim_mode=0`.",
+	},
+	"EDGE_CPU_AFFINITY_PIN": {
+		Description: "A CPU-intensive process is artificially constrained to a single core while aggregate system CPU is largely idle.",
+		Thresholds: []string{
+			"Process CPU utilization ≥ 90% while `CpusAllowed == 1` and total system idle ≥ 75% on multi-core host.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`taskset -p 0xffffffff <PID>`.",
+	},
+	"EDGE_ZOMBIE_DEFUNCT_LEAK": {
+		Description: "A parent process fails to reap dead child processes via `waitpid()`, polluting the process table.",
+		Thresholds: []string{
+			"Total zombie processes (`state == 'Z'`) ≥ 50, identifying culprit parent PPID.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/status",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "`kill -HUP <ParentPID>`.",
+	},
+	"EDGE_CGROUP_OOM_KILL_EVENT": {
+		Description: "Container memory limits were exceeded and the cgroup memory controller terminated one or more container processes.",
+		Thresholds: []string{
+			"Delta in cgroup v2 `memory.events` `oom_kill > 0`.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`docker update --memory <size> <Container>` or profile memory leak.",
+	},
+	"EDGE_ZONE_DMA32_EXHAUSTION": {
+		Description: "Low physical memory zone DMA32 (< 4GB) is exhausted of free pages on 64GB+ servers, causing hardware drivers to stall.",
+		Thresholds: []string{
+			"`DMA32FreePages == 0` while `NormalFreePages >= 250,000` (~1GB+) in `/proc/buddyinfo`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w vm.zone_reclaim_mode=0` or update driver to 64-bit DMA.",
+	},
+	"EDGE_KSM_SCAN_STALL": {
+		Description: "Kernel Samepage Merging memory deduplication scanner is thrashing CPU and cache lines.",
+		Thresholds: []string{
+			"`KSM.Running == true`, `pages_to_scan >= 10,000`, and `ksmd` CPU ≥ 50%.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo 0 > /sys/kernel/mm/ksm/run`.",
+	},
+	"EDGE_IRQ_CORE_STORM": {
+		Description: "Unbalanced hardware interrupts (> 50,000 IRQs) overwhelming a single CPU core without SMP distribution.",
+		Thresholds: []string{
+			"Single core handling ≥ 50,000 IRQs and ≥ 5× other cores average in `/proc/interrupts`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Start `irqbalance` service or configure `/proc/irq/<N>/smp_affinity`.",
+	},
+	"EDGE_SLAB_UNRECLAIM_LEAK": {
+		Description: "Unreclaimable kernel slab memory (`SUnreclaim` - dentries/inodes) occupies ≥ 40% of physical RAM, invisible in userland `ps`.",
+		Thresholds: []string{
+			"`SUnreclaim >= 0.40 * MemTotal` in `/proc/meminfo`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo 2 > /proc/sys/vm/drop_caches` or tune `sysctl -w vm.vfs_cache_pressure=200`.",
+	},
+	"EDGE_INOTIFY_WATCH_EXHAUSTION": {
+		Description: "The system inotify watch ceiling (`max_user_watches`) is set to a legacy restrictive limit (≤ 8192), risking `ENOSPC` errors.",
+		Thresholds: []string{
+			"`/proc/sys/fs/inotify/max_user_watches <= 8192`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`sysctl -w fs.inotify.max_user_watches=524288`.",
+	},
+	"EDGE_RCU_SCHEDULER_STALL": {
+		Description: "Kernel tasks or threads are blocked waiting for Read-Copy-Update (RCU) grace periods to advance, stalling memory deallocation and network table syncs.",
+		Thresholds: []string{
+			"Multiple processes with `wchan` matching `rcu_gp_kthread`, `synchronize_rcu`, or `rcu_sched`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Check CPU-bound non-preemptible kernel routines or pin real-time tasks away from CPU 0.",
+	},
+	"EDGE_THP_COLLAPSE_STALL": {
+		Description: "Background `khugepaged` daemon is actively coalescing 4KB pages into 2MB hugepages during direct allocation stalls, locking page tables.",
+		Thresholds: []string{
+			"Delta in `/proc/vmstat` for `thp_collapse_alloc > 0` with `allocstall_direct > 0`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo madvise > /sys/kernel/mm/transparent_hugepage/enabled` or disable background defrag (`echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag`).",
+	},
+	"EDGE_FUSE_FS_STALL": {
+		Description: "Processes are blocked waiting for a FUSE (Filesystem in Userspace) daemon to respond to file I/O requests.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Inspect FUSE mount daemon performance (e.g. sshfs, s3fs, glusterfs), or move latency-sensitive data to native filesystems (ext4/xfs).",
+	},
+	"EDGE_COMPACT_FAIL_RATE": {
+		Description: "Kernel memory compaction attempts are failing at a high rate during the sampling window due to severe physical page fragmentation.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Trigger global proactive memory compaction: echo 1 > /proc/sys/vm/compact_memory or lower vm.extfrag_threshold.",
+	},
+	"EDGE_MAJOR_PAGE_FAULT_STORM": {
+		Description: "High rate of major page faults is forcing synchronous storage reads to load file-backed memory and code pages.",
+		Thresholds: []string{
+			"Metric delta exceeded operational thresholds during sampling window",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Preload executable binaries and critical working sets into page cache (e.g. vmtouch) or prevent memory cache pressure.",
+	},
+	"EDGE_THP_SPLIT_STORM": {
+		Description: "2MB Huge Pages are frequently being split into 512 4KB pages under memory pressure, locking page tables.",
+		Thresholds: []string{
+			"`THPSplitDelta >= 500` in `/proc/vmstat` under allocation stalls.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo never > /sys/kernel/mm/transparent_hugepage/enabled` or avoid `fork()` in large memory applications.",
+	},
+	"EDGE_KHUGEPAGED_CPU_BURN": {
+		Description: "Background `khugepaged` daemon is burning CPU continuously failing to coalesce fragmented memory.",
+		Thresholds: []string{
+			"Process `khugepaged` CPU $\\ge 40.0\\%$ AND failed collapse deltas $> 0$.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag` or raise scan sleep time.",
+	},
+	"EDGE_DISK_DEVICE_IOERR_HANG": {
+		Description: "Physical disk block device has in-flight commands that are stalled/timed out with zero completed throughput.",
+		Thresholds: []string{
+			"Block device with $\\ge 3$ in-flight requests, 0 completed reads/writes, and $\\ge 85\\%$ device utilization.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Check dmesg for SCSI/NVMe command timeouts, inspect SMART health, or failover multipath storage route.",
+	},
+	"EDGE_KCOMPACTD_CPU_SPIN": {
+		Description: "Kernel proactive memory compaction daemon `kcompactd0` is spinning at high CPU failing to assemble contiguous memory pages.",
+		Thresholds: []string{
+			"Process `kcompactd*` CPU $\\ge 40.0\\%$ AND `CompactFailDelta > 0` in `/proc/vmstat`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`sysctl -w vm.compaction_proactiveness=20` or trigger manual compaction (`echo 1 > /proc/sys/vm/compact_memory`).",
+	},
+	"EDGE_MIN_FREE_KBYTES_STALL": {
+		Description: "The kernel memory watermark `vm.min_free_kbytes` is undersized, causing fast allocation bursts to hit direct reclaim stalls instead of asynchronous kswapd reclaim.",
+		Thresholds: []string{
+			"`min_free_kbytes < 0.25% MemTotal` AND `AllocStallDirectDelta >= 10`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w vm.min_free_kbytes=<1-2% of RAM>` to provide kswapd adequate headroom.",
+	},
+	"EDGE_CORE_PATTERN_PIPE_STALL": {
+		Description: "Crashing processes are hung in uninterruptible sleep `do_coredump` waiting to pipe memory to a hung user-space core dumper helper.",
+		Thresholds: []string{
+			"$\\ge 2$ processes sleeping in `do_coredump` or `pipe_wait` wchan.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Restart systemd-coredump or reset: `sysctl -w kernel.core_pattern=core`.",
+	},
+	"EDGE_TCP_PAWS_DROP": {
+		Description: "Inbound TCP segments are dropped due to Protection Against Wrapped Sequences (PAWS) timestamp collisions across NAT gateways.",
+		Thresholds: []string{
+			"`PAWSEstabDelta >= 10` OR `PAWSPassiveDelta >= 10` in `/proc/net/netstat`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Disable timestamp verification on NAT endpoints: `sysctl -w net.ipv4.tcp_timestamps=0` or ensure NAT preserves timestamps.",
+	},
+	"EDGE_CMA_ZONE_EXHAUSTION": {
+		Description: "Contiguous Memory Allocator (CMA) pool is depleted, causing DMA buffer allocation failures for device drivers (GPU, RDMA, V4L2).",
+		Thresholds: []string{
+			"`CmaTotal > 0` AND `CmaFree / CmaTotal <= 5%` in `/proc/meminfo`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Increase kernel boot CMA parameter (e.g. `cma=512M` or `cma=1G` in `/etc/default/grub`).",
+	},
+	"EDGE_LOOP_DEVICE_SERIALIZATION": {
+		Description: "Loopback storage device (`/dev/loopX`) is saturated, bottlenecking container or squashfs image I/O through single-threaded kernel workers.",
+		Thresholds: []string{
+			"Disk device name prefixed with `loop` has `UtilPercent >= 80.0%`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Migrate loopback images to native ext4/XFS filesystems or raw NVMe partitions.",
+	},
+	"EDGE_RT_SCHED_THROTTLING": {
+		Description: "Real-time priority task (`SCHED_FIFO` / `SCHED_RR`) is spinning at high CPU and hitting kernel `sched_rt_runtime_us` safety throttling limit.",
+		Thresholds: []string{
+			"Process with `Policy == 1 (FIFO)` or `Policy == 2 (RR)` has `CPUPercent >= 90.0%` with `sched_rt_runtime_us > 0`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Add explicit sleep/yield calls in real-time loops or isolate execution cores via `isolcpus`.",
+	},
+	"EDGE_NUMA_AUTO_BALANCING_SCAN_STALL": {
+		Description: "Kernel automatic NUMA balancing page table scanning is consuming high system CPU continuously scanning virtual memory mappings.",
+		Thresholds: []string{
+			"`NumaBalancing > 0` AND `NumaPteUpdatesDelta >= 20000` AND `SystemCPU >= 10.0%`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w kernel.numa_balancing=0` for statically pinned NUMA workloads.",
+	},
+	"EDGE_INOTIFY_QUEUE_OVERFLOW": {
+		Description: "Inotify event queue capacity (`max_queued_events`) is undersized during sudden bursts of file modifications, dropping events.",
+		Thresholds: []string{
+			"`max_queued_events <= 16384` AND `max_user_watches >= 65536` AND context switches $\\ge 25,000/\\text{sec}$.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w fs.inotify.max_queued_events=1048576`.",
+	},
+	"EDGE_CGROUP_CFS_BURST_STARVATION": {
+		Description: "Container has consumed its Cgroup v2 CFS CPU burst allowance and abruptly transitioned to hard CPU throttling.",
+		Thresholds: []string{
+			"Cgroup with `NrBurstsDelta > 0` AND `NrThrottledDelta > 0` AND `ThrottledUsecDelta >= 50,000` (50ms).",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`echo \"max 200000\" > /sys/fs/cgroup/<path>/cpu.max.burst`.",
+	},
+	"EDGE_ZSWAP_COMPRESSOR_CONTENTION": {
+		Description: "Linux Zswap memory compression pool is churning heavily, causing CPU compression contention and direct reclaim stalls.",
+		Thresholds: []string{
+			"`ZswpoutDelta >= 500` or `ZswapRejectReclaimFailDelta > 0` AND `AllocStallDirectDelta > 0` or System CPU $\\ge 20.0\\%$.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo 30 > /sys/module/zswap/parameters/max_pool_percent` and use lz4 compressor.",
+	},
+	"EDGE_NET_IFACE_CARRIER_FLAP": {
+		Description: "Network interface is rapidly flapping link carrier state with hardware transmission or CRC alignment errors.",
+		Thresholds: []string{
+			"Network interface with `CarrierChangesDelta >= 3` and `RxCRCErrorsDelta > 0` or `TxCarrierErrorsDelta > 0` or `OperState != \"up\"`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`ip link set <iface> down && ip link set <iface> up` or inspect physical cabling / SFP optics.",
+	},
+	"EDGE_THP_ALLOC_FALLBACK_STALL": {
+		Description: "Kernel hugepage allocations fail due to physical memory fragmentation, falling back to 512x 4KB split allocations and direct reclaim stalls.",
+		Thresholds: []string{
+			"`THPFaultFallbackDelta >= 500` or `THPCollapseAllocFailedDelta >= 20` with `CompactStallDelta > 0` or `AllocStallDirectDelta > 0`.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo madvise > /sys/kernel/mm/transparent_hugepage/enabled && echo 1 > /proc/sys/vm/compact_memory`.",
+	},
+	"EDGE_SCHED_MIGRATION_BOUNCE": {
+		Description: "Aggressive CPU scheduler task migration across NUMA nodes caused by excessively low `sched_migration_cost_ns`.",
+		Thresholds: []string{
+			"`SchedMigrationCostNS <= 25000` with `NumaMissDelta >= 2500` or (`ContextSwitchesDelta >= 35000` and `BusyPercent >= 50.0%`).",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`sysctl -w kernel.sched_migration_cost_ns=500000`.",
+	},
+	"EDGE_IP_FRAG_REASM_DROPS": {
+		Description: "IP packet fragment reassembly buffers are overflowing or timing out due to MTU mismatches or packet loss.",
+		Thresholds: []string{
+			"`ReasmFailsDelta >= 10` or `ReasmTimeoutDelta >= 5` with `ReasmReqdsDelta >= 20`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.ipfrag_high_thresh=4194304 && sysctl -w net.ipv4.ipfrag_time=60`.",
+	},
+	"EDGE_CGROUP_V2_FREEZE_HANG": {
+		Description: "Container / Cgroup v2 subtree is placed in frozen state via `cgroup.freeze`, suspending execution in kernel space.",
+		Thresholds: []string{
+			"Cgroup `Frozen == true` or process in `cgroup_freeze_task` / `cgroup_do_freeze` wchan.",
+		},
+		KernelSources: []string{
+			"/sys/fs/cgroup/",
+		},
+		Remediation: "`echo 0 > /sys/fs/cgroup/<path>/cgroup.freeze`.",
+	},
+	"EDGE_SYSV_SHM_SEGMENT_LIMIT": {
+		Description: "System V shared memory segment table (`shmmni` / `shmall`) is saturated, blocking database shared memory allocations.",
+		Thresholds: []string{
+			"Allocated segments $\\ge 90\\%$ of `shmmni` or pages $\\ge 90\\%$ of `shmall` with high shared memory usage.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w kernel.shmmni=8192 && sysctl -w kernel.shmall=4294967296`.",
+	},
+	"EDGE_NET_DEV_RX_NO_BUFFERS": {
+		Description: "Network interface hardware/driver RX ring buffer descriptor pool is exhausted (`rx_missed_errors` / `rx_fifo_errors`), silently dropping frames at the DMA layer.",
+		Thresholds: []string{
+			"Interface `RxMissedErrorsDelta >= 20` or `RxFIFOErrorsDelta >= 20` with link state `up`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`ethtool -G <iface> rx 4096 && sysctl -w net.core.netdev_max_backlog=10000`.",
+	},
+	"EDGE_TRANSPARENT_HUGEPAGE_DEFRAG_ALWAYS": {
+		Description: "Transparent HugePage defragmentation mode is set to synchronous `always`, forcing regular 4KB allocations to stall in direct 2MB page compaction.",
+		Thresholds: []string{
+			"Kernel THP defrag setting is `always` with `CompactStallDelta >= 15` or direct allocation stalls.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo madvise > /sys/kernel/mm/transparent_hugepage/defrag`.",
+	},
+	"EDGE_CGROUP_MEMORY_MAX_OOM_STALL": {
+		Description: "Cgroup v2 `memory.max` hard limit reached, forcing synchronous container direct reclamation before OOM killer execution.",
+		Thresholds: []string{
+			"Cgroup `MemEventsMaxDelta >= 5` with process in container.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`docker update --memory=<limit> <container>`.",
+	},
+	"EDGE_THP_SCAN_EXHAUSTION_STALL": {
+		Description: "Kernel `khugepaged` daemon exceeded scan limits without completing 2MB collapses, burning CPU scanning fragmented pages.",
+		Thresholds: []string{
+			"`THPScanExceedDelta >= 50` under memory fragmentation.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "`echo 512 > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan`.",
+	},
+	"EDGE_NET_DEV_TX_QUEUE_TIMEOUT": {
+		Description: "Network interface driver encountered transmit queue watchdog timeouts or transmit hardware drops.",
+		Thresholds: []string{
+			"Interface `TxErrorsDelta >= 20` or `TxCarrierErrorsDelta >= 5`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`ip link set <iface> down && ip link set <iface> up` or upgrade driver/firmware.",
+	},
+	"EDGE_CGROUP_CPU_CORE_PIN_STARVATION": {
+		Description: "Container process is pinned to a single CPU core via `cpuset.cpus` at high CPU utilization while the host is largely idle.",
+		Thresholds: []string{
+			"Container process pinned to 1 core at $\\ge 85\\%$ CPU with host idle $\\ge 50\\%$.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "`echo 0-$(nproc -1) > /sys/fs/cgroup/<path>/cpuset.cpus` or `docker update --cpuset-cpus`.",
+	},
+	"EDGE_HUGETLB_VMA_MISALIGN_FAULT": {
+		Description: "Application generated 2MB hugepage page faults with high allocation fallback rates due to unaligned virtual memory mappings.",
+		Thresholds: []string{
+			"`THPFaultFallbackDelta >= 50` without successful 2MB allocations.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "Ensure mmap/madvise allocations are 2MB-aligned (`posix_memalign`).",
+	},
+	"EDGE_TCP_CHRONIC_RTO_COLLAPSE": {
+		Description: "TCP connections experienced repeated Retransmission Timeout timer expirations, collapsing congestion window to 1 MSS.",
+		Thresholds: []string{
+			"`TCPTimeoutsDelta >= 15` with outbound segment retransmissions.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Inspect network path jitter/loss with mtr or tune `sysctl -w net.ipv4.tcp_min_rto_ms=50`.",
+	},
+	"EDGE_MEMCG_SOCK_MEMORY_THROTTLE": {
+		Description: "Container socket buffers charged against memory cgroup limits, incurring soft-limit throttling.",
+		Thresholds: []string{
+			"Cgroup `MemoryHighEventsDelta > 0` with active process network sockets.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "Increase container memory limit or exclude socket buffers from cgroup accounting.",
+	},
+	"EDGE_TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_SPIN": {
+		Description: "Transparent HugePage zero-page read-fault lock contention and CPU spin under sparse memory allocations.",
+		Thresholds: []string{
+			"`THPZeroPageAllocDelta >= 100` AND `SystemCPU >= 15%`.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`echo 0 > /sys/kernel/mm/transparent_hugepage/use_zero_page`.",
+	},
+	"EDGE_SYSFS_CPU_HOTPLUG_LOCK_CONTENTION": {
+		Description: "Kernel CPU hotplugging or governor transitions hold subsystem topology locks, blocking thread dispatch.",
+		Thresholds: []string{
+			"Process in `cpu_hotplug_lock`, `cpuset_mutex`, or `cpufreq_policy_rwsem` in D-state.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/schedstat",
+		},
+		Remediation: "Lock CPU scaling governor to 'performance': `cpupower frequency-set -g performance`.",
+	},
+	"EDGE_NET_IP_MULTICAST_IGMP_REPORT_STALL": {
+		Description: "IP Multicast / UDP Broadcast socket buffer drops degrading cluster discovery and broadcast replication.",
+		Thresholds: []string{
+			"`UDPInErrorsDelta >= 50` or `UDPRcvbufErrorsDelta >= 10`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.igmp_max_memberships=1024` and enlarge socket receive buffers.",
+	},
+	"EDGE_PROC_PID_TASK_PTHREAD_LIMIT": {
+		Description: "Process spawned high thread counts approaching system thread ceilings and virtual memory limits.",
+		Thresholds: []string{
+			"Process with `NumThreads >= 500`.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/status",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "Reduce worker thread pool size or raise `sysctl -w kernel.threads-max` and `sysctl -w vm.max_map_count`.",
+	},
+	"EDGE_ZONE_NORMAL_FRAGMENTATION": {
+		Description: "Normal memory zone lacks contiguous high-order pages (order-4+), causing multi-page alloc stalls.",
+		Thresholds: []string{
+			"Normal zone `NormalHighOrderPages == 0` AND `NormalOrder0Pages >= 500`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Trigger memory compaction: `echo 1 > /proc/sys/vm/compact_memory`.",
+	},
+	"EDGE_NET_DEV_CARRIER_DOWN_DROP": {
+		Description: "Processes attempting socket transmissions over inactive/down network interfaces.",
+		Thresholds: []string{
+			"Network interface `OperState == \"down\"` with `TxErrorsDelta > 0`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "Bring interface up: `ip link set <iface> up` or verify physical cable carrier.",
+	},
+	"EDGE_PROC_PTRACED_STOPPED_STALL": {
+		Description: "Process suspended in 'T'/'t' state by debugger or signal.",
+		Thresholds: []string{
+			"Process in state 'T'/'t' with `TracerPID != 0`.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/status",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "Resume process execution: `kill -CONT <PID>` or detach debugger.",
+	},
+	"EDGE_MEM_SLAB_DENTRY_PRESSURE": {
+		Description: "Unevictable or bloated slab dentry/inode caches consuming excessive RAM under active direct scan pressure.",
+		Thresholds: []string{
+			"`SUnreclaim` $\\ge 30\\%$ RAM with direct page scans $\\ge 100$.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w vm.vfs_cache_pressure=150 && echo 2 > /proc/sys/vm/drop_caches`.",
+	},
+	"EDGE_NET_IP_REASM_TIMEOUT_STALL": {
+		Description: "Fragmented IP packet reassembly timer timeouts dropping packets under high traffic.",
+		Thresholds: []string{
+			"`IPReasmTimeoutDelta >= 5` OR `IPReasmFailsDelta >= 20`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.ipfrag_high_thresh=8388608 && sysctl -w net.ipv4.ipfrag_time=60`.",
+	},
+	"EDGE_MEM_MIN_WATERMARK_BOUNCE": {
+		Description: "Kernel memory allocator experiencing high direct scans fluctuating near low watermark boundaries without alloc stalls.",
+		Thresholds: []string{
+			"`PgScanDirectDelta >= 50` AND `AllocStallDirectDelta == 0` with low MemAvailable.",
+		},
+		KernelSources: []string{
+			"/proc/meminfo",
+			"/proc/vmstat",
+		},
+		Remediation: "`sysctl -w vm.min_free_kbytes=131072 && sysctl -w vm.watermark_scale_factor=200`.",
+	},
+	"EDGE_PROC_COMM_SWITCH_TRUNCATION": {
+		Description: "High thread churn with continuous process command renaming blocking on `mmap_lock` / credentials.",
+		Thresholds: []string{
+			"Process with $\\ge 150$ threads in `do_prctl` / `prctl_set_mm`.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Avoid dynamic `pthread_setname_np` inside high-frequency worker loops.",
+	},
+	"EDGE_EPOLL_POLL_TIMEOUT_BURST": {
+		Description: "Worker threads repeatedly timing out in epoll without servicing requests, indicating stalled dispatcher.",
+		Thresholds: []string{
+			"Process in `epoll_pwait` with $\\ge 50$ threads, CPU $< 0.2\\%$, $\\ge 100$ open FDs.",
+		},
+		KernelSources: []string{
+			"/proc/stat",
+			"/proc/vmstat",
+		},
+		Remediation: "Tune `epoll_wait` timeout parameters and verify upstream load balancer health checks.",
+	},
+	"EDGE_NET_TCP_SYN_FLOOD_DROP": {
+		Description: "Kernel rejected incoming SYN cookie handshakes due to validation hash mismatches or spoofed sequence numbers.",
+		Thresholds: []string{
+			"`SyncookiesFailedDelta >= 10`.",
+		},
+		KernelSources: []string{
+			"/proc/net/netstat",
+			"/proc/net/snmp",
+			"/proc/net/sockstat",
+		},
+		Remediation: "`sysctl -w net.ipv4.tcp_syncookies=1 && sysctl -w net.ipv4.tcp_max_syn_backlog=32768`.",
+	},
+	"EDGE_SYSFS_POWER_THROTTLE_EVENT": {
+		Description: "CPU package thermal sensor is elevated ($\\ge 75^\\circ\\text{C}$), constraining CPU turbo boost frequencies.",
+		Thresholds: []string{
+			"Thermal package temp $\\ge 75^\\circ\\text{C}$ with core frequencies constrained below 0.75x max.",
+		},
+		KernelSources: []string{
+			"/proc/diskstats",
+			"/sys/block/*/queue/",
+		},
+		Remediation: "Inspect chassis cooling fans or disable server power capping policies in IPMI/BIOS.",
+	},
+	"EDGE_PROC_ZOMBIE_PARENT_DEADLOCK": {
+		Description: "Supervisor/parent process stuck in `wait4` failing to reap accumulating zombie children.",
+		Thresholds: []string{
+			"Parent process sleeping in `wait4` with $\\ge 10$ zombie child processes.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/status",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "Send SIGCHLD to parent: `kill -SIGCHLD <PID>` or restart supervisor service.",
+	},
+	"EDGE_IO_SCHEDULER_MISMATCH": {
+		Description: "Block device is configured with a suboptimal I/O scheduler (SSD with bfq or HDD with none) and suffering measurable queue latency.",
+		Thresholds: []string{
+			"SSD uses bfq OR HDD uses none",
+			"Device AvgQueueLatencyMS > 20.0ms",
+		},
+		KernelSources: []string{
+			"/sys/block/*/queue/scheduler",
+			"/sys/block/*/queue/rotational",
+			"/proc/diskstats",
+		},
+		Remediation: "Change I/O scheduler: echo none > /sys/block/<dev>/queue/scheduler (for SSD/NVMe) or mq-deadline/bfq (for HDD).",
+	},
+	"EDGE_OOM_IMMUNE_MEMORY_HOG": {
+		Description: "A non-critical process has set oom_score_adj to -1000 (OOM immune) while consuming > 30% of physical RAM under system memory pressure.",
+		Thresholds: []string{
+			"oom_score_adj == -1000",
+			"RSSBytes > 30.0% MemTotal",
+			"MemAvailable < 15.0% MemTotal",
+			"comm not in system daemon whitelist",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/oom_score_adj",
+			"/proc/[pid]/stat",
+			"/proc/meminfo",
+		},
+		Remediation: "Reset oom_score_adj or investigate memory leak: echo 0 > /proc/<pid>/oom_score_adj.",
+	},
 }
 
 // RuleTHPCompactionStall detects memory defragmentation latency spikes caused by Transparent Huge Pages.
 type RuleTHPCompactionStall struct{ noSuppression }
 
-func (r *RuleTHPCompactionStall) ID() string           { return "EDGE_THP_COMPACTION_STALL" }
+func (r *RuleTHPCompactionStall) ID() string { return "EDGE_THP_COMPACTION_STALL" }
+func (r *RuleTHPCompactionStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTHPCompactionStall) Tier() int            { return 3 }
 func (r *RuleTHPCompactionStall) IsPIDDependent() bool { return false }
 
@@ -134,7 +872,10 @@ func (r *RuleTHPCompactionStall) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RulePTYStdoutLock detects processes blocked because terminal/SSH stdout buffer is unread.
 type RulePTYStdoutLock struct{ noSuppression }
 
-func (r *RulePTYStdoutLock) ID() string           { return "EDGE_PTY_STDOUT_LOCK" }
+func (r *RulePTYStdoutLock) ID() string { return "EDGE_PTY_STDOUT_LOCK" }
+func (r *RulePTYStdoutLock) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RulePTYStdoutLock) Tier() int            { return 3 }
 func (r *RulePTYStdoutLock) IsPIDDependent() bool { return true }
 
@@ -177,7 +918,10 @@ func (r *RulePTYStdoutLock) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleHPETClocksourceDegrade detects fallback from fast vDSO TSC to slow MMIO clock sources.
 type RuleHPETClocksourceDegrade struct{ noSuppression }
 
-func (r *RuleHPETClocksourceDegrade) ID() string           { return "EDGE_HPET_CLOCKSOURCE_DEGRADE" }
+func (r *RuleHPETClocksourceDegrade) ID() string { return "EDGE_HPET_CLOCKSOURCE_DEGRADE" }
+func (r *RuleHPETClocksourceDegrade) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleHPETClocksourceDegrade) Tier() int            { return 3 }
 func (r *RuleHPETClocksourceDegrade) IsPIDDependent() bool { return false }
 
@@ -209,7 +953,10 @@ func (r *RuleHPETClocksourceDegrade) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleCgroupDirtyThrottle detects processes throttled in dirty memory balance flushes.
 type RuleCgroupDirtyThrottle struct{ noSuppression }
 
-func (r *RuleCgroupDirtyThrottle) ID() string           { return "EDGE_CGROUP_DIRTY_THROTTLE" }
+func (r *RuleCgroupDirtyThrottle) ID() string { return "EDGE_CGROUP_DIRTY_THROTTLE" }
+func (r *RuleCgroupDirtyThrottle) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCgroupDirtyThrottle) Tier() int            { return 3 }
 func (r *RuleCgroupDirtyThrottle) IsPIDDependent() bool { return true }
 
@@ -251,7 +998,10 @@ func (r *RuleCgroupDirtyThrottle) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleFutexContention detects hundreds of threads blocked competing for the same user-space mutex lock.
 type RuleFutexContention struct{ noSuppression }
 
-func (r *RuleFutexContention) ID() string           { return "EDGE_FUTEX_CONTENTION" }
+func (r *RuleFutexContention) ID() string { return "EDGE_FUTEX_CONTENTION" }
+func (r *RuleFutexContention) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleFutexContention) Tier() int            { return 3 }
 func (r *RuleFutexContention) IsPIDDependent() bool { return true }
 
@@ -295,7 +1045,10 @@ func (r *RuleFutexContention) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 // RuleNUMARemoteThrashing detects remote cross-socket memory allocation latency.
 type RuleNUMARemoteThrashing struct{ noSuppression }
 
-func (r *RuleNUMARemoteThrashing) ID() string           { return "EDGE_NUMA_REMOTE_THRASHING" }
+func (r *RuleNUMARemoteThrashing) ID() string { return "EDGE_NUMA_REMOTE_THRASHING" }
+func (r *RuleNUMARemoteThrashing) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNUMARemoteThrashing) Tier() int            { return 3 }
 func (r *RuleNUMARemoteThrashing) IsPIDDependent() bool { return false }
 
@@ -334,7 +1087,10 @@ func (r *RuleNUMARemoteThrashing) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleCPUAffinityPin detects single-core affinity bottleneck when aggregate system CPU is largely idle.
 type RuleCPUAffinityPin struct{ noSuppression }
 
-func (r *RuleCPUAffinityPin) ID() string           { return "EDGE_CPU_AFFINITY_PIN" }
+func (r *RuleCPUAffinityPin) ID() string { return "EDGE_CPU_AFFINITY_PIN" }
+func (r *RuleCPUAffinityPin) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCPUAffinityPin) Tier() int            { return 3 }
 func (r *RuleCPUAffinityPin) IsPIDDependent() bool { return true }
 
@@ -387,7 +1143,10 @@ func (r *RuleCPUAffinityPin) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis,
 // RuleZombieDefunctLeak detects zombie / defunct process accumulation from unreaped children.
 type RuleZombieDefunctLeak struct{ noSuppression }
 
-func (r *RuleZombieDefunctLeak) ID() string           { return "EDGE_ZOMBIE_DEFUNCT_LEAK" }
+func (r *RuleZombieDefunctLeak) ID() string { return "EDGE_ZOMBIE_DEFUNCT_LEAK" }
+func (r *RuleZombieDefunctLeak) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleZombieDefunctLeak) Tier() int            { return 3 }
 func (r *RuleZombieDefunctLeak) IsPIDDependent() bool { return true }
 
@@ -468,7 +1227,10 @@ func identifyTopZombieParent(procs []collector.ProcessDiff, parentZombies map[in
 // RuleCgroupOOMKillEvent detects silent container OOM kill events triggered by cgroup memory limits.
 type RuleCgroupOOMKillEvent struct{ noSuppression }
 
-func (r *RuleCgroupOOMKillEvent) ID() string           { return "EDGE_CGROUP_OOM_KILL_EVENT" }
+func (r *RuleCgroupOOMKillEvent) ID() string { return "EDGE_CGROUP_OOM_KILL_EVENT" }
+func (r *RuleCgroupOOMKillEvent) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCgroupOOMKillEvent) Tier() int            { return 3 }
 func (r *RuleCgroupOOMKillEvent) IsPIDDependent() bool { return true }
 
@@ -509,7 +1271,10 @@ func (r *RuleCgroupOOMKillEvent) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleDMA32ZoneExhaustion detects low-memory DMA32 zone depletion on multi-gigabyte servers.
 type RuleDMA32ZoneExhaustion struct{ noSuppression }
 
-func (r *RuleDMA32ZoneExhaustion) ID() string           { return "EDGE_ZONE_DMA32_EXHAUSTION" }
+func (r *RuleDMA32ZoneExhaustion) ID() string { return "EDGE_ZONE_DMA32_EXHAUSTION" }
+func (r *RuleDMA32ZoneExhaustion) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleDMA32ZoneExhaustion) Tier() int            { return 3 }
 func (r *RuleDMA32ZoneExhaustion) IsPIDDependent() bool { return false }
 
@@ -547,7 +1312,10 @@ func (r *RuleDMA32ZoneExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleKSMScanStall detects Kernel Samepage Merging CPU thrashing and cache eviction.
 type RuleKSMScanStall struct{ noSuppression }
 
-func (r *RuleKSMScanStall) ID() string           { return "EDGE_KSM_SCAN_STALL" }
+func (r *RuleKSMScanStall) ID() string { return "EDGE_KSM_SCAN_STALL" }
+func (r *RuleKSMScanStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleKSMScanStall) Tier() int            { return 3 }
 func (r *RuleKSMScanStall) IsPIDDependent() bool { return true }
 
@@ -601,7 +1369,10 @@ func (r *RuleKSMScanStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 // RuleIRQCoreStorm detects severe hardware interrupt imbalance on a single CPU core.
 type RuleIRQCoreStorm struct{ noSuppression }
 
-func (r *RuleIRQCoreStorm) ID() string           { return "EDGE_IRQ_CORE_STORM" }
+func (r *RuleIRQCoreStorm) ID() string { return "EDGE_IRQ_CORE_STORM" }
+func (r *RuleIRQCoreStorm) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleIRQCoreStorm) Tier() int            { return 3 }
 func (r *RuleIRQCoreStorm) IsPIDDependent() bool { return false }
 
@@ -639,7 +1410,10 @@ func (r *RuleIRQCoreStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, b
 // RuleSlabUnreclaimableLeak detects kernel dentry / inode slab memory consumption leaks.
 type RuleSlabUnreclaimableLeak struct{ noSuppression }
 
-func (r *RuleSlabUnreclaimableLeak) ID() string           { return "EDGE_SLAB_UNRECLAIM_LEAK" }
+func (r *RuleSlabUnreclaimableLeak) ID() string { return "EDGE_SLAB_UNRECLAIM_LEAK" }
+func (r *RuleSlabUnreclaimableLeak) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleSlabUnreclaimableLeak) Tier() int            { return 3 }
 func (r *RuleSlabUnreclaimableLeak) IsPIDDependent() bool { return false }
 
@@ -676,7 +1450,10 @@ func (r *RuleSlabUnreclaimableLeak) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleInotifyWatchExhaustion detects inotify watch table saturation or restrictive user limits.
 type RuleInotifyWatchExhaustion struct{ noSuppression }
 
-func (r *RuleInotifyWatchExhaustion) ID() string           { return "EDGE_INOTIFY_WATCH_EXHAUSTION" }
+func (r *RuleInotifyWatchExhaustion) ID() string { return "EDGE_INOTIFY_WATCH_EXHAUSTION" }
+func (r *RuleInotifyWatchExhaustion) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleInotifyWatchExhaustion) Tier() int            { return 3 }
 func (r *RuleInotifyWatchExhaustion) IsPIDDependent() bool { return false }
 
@@ -714,7 +1491,10 @@ func (r *RuleInotifyWatchExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleRCUSchedulerStall detects kernel Read-Copy-Update (RCU) grace period contention.
 type RuleRCUSchedulerStall struct{ noSuppression }
 
-func (r *RuleRCUSchedulerStall) ID() string           { return "EDGE_RCU_SCHEDULER_STALL" }
+func (r *RuleRCUSchedulerStall) ID() string { return "EDGE_RCU_SCHEDULER_STALL" }
+func (r *RuleRCUSchedulerStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleRCUSchedulerStall) Tier() int            { return 3 }
 func (r *RuleRCUSchedulerStall) IsPIDDependent() bool { return true }
 
@@ -755,7 +1535,10 @@ func (r *RuleRCUSchedulerStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleTHPCollapseStall detects Transparent Huge Page background defragmentation and collapse latency.
 type RuleTHPCollapseStall struct{ noSuppression }
 
-func (r *RuleTHPCollapseStall) ID() string           { return "EDGE_THP_COLLAPSE_STALL" }
+func (r *RuleTHPCollapseStall) ID() string { return "EDGE_THP_COLLAPSE_STALL" }
+func (r *RuleTHPCollapseStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTHPCollapseStall) Tier() int            { return 3 }
 func (r *RuleTHPCollapseStall) IsPIDDependent() bool { return false }
 
@@ -789,7 +1572,10 @@ func (r *RuleTHPCollapseStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleFUSEFilesystemLatency detects user processes stalled on unresponsive FUSE daemon wait queues.
 type RuleFUSEFilesystemLatency struct{ noSuppression }
 
-func (r *RuleFUSEFilesystemLatency) ID() string           { return "EDGE_FUSE_FS_STALL" }
+func (r *RuleFUSEFilesystemLatency) ID() string { return "EDGE_FUSE_FS_STALL" }
+func (r *RuleFUSEFilesystemLatency) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleFUSEFilesystemLatency) Tier() int            { return 3 }
 func (r *RuleFUSEFilesystemLatency) IsPIDDependent() bool { return true }
 
@@ -833,7 +1619,10 @@ func (r *RuleFUSEFilesystemLatency) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleCompactionFailureRate detects high failure rate of memory compaction attempts causing fragmentation.
 type RuleCompactionFailureRate struct{ noSuppression }
 
-func (r *RuleCompactionFailureRate) ID() string           { return "EDGE_COMPACT_FAIL_RATE" }
+func (r *RuleCompactionFailureRate) ID() string { return "EDGE_COMPACT_FAIL_RATE" }
+func (r *RuleCompactionFailureRate) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCompactionFailureRate) Tier() int            { return 3 }
 func (r *RuleCompactionFailureRate) IsPIDDependent() bool { return false }
 
@@ -871,7 +1660,10 @@ func (r *RuleCompactionFailureRate) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleMajorPageFaultStorm detects bursts of major page faults driving synchronous disk reads.
 type RuleMajorPageFaultStorm struct{ noSuppression }
 
-func (r *RuleMajorPageFaultStorm) ID() string           { return "EDGE_MAJOR_PAGE_FAULT_STORM" }
+func (r *RuleMajorPageFaultStorm) ID() string { return "EDGE_MAJOR_PAGE_FAULT_STORM" }
+func (r *RuleMajorPageFaultStorm) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleMajorPageFaultStorm) Tier() int            { return 3 }
 func (r *RuleMajorPageFaultStorm) IsPIDDependent() bool { return false }
 
@@ -902,7 +1694,10 @@ func (r *RuleMajorPageFaultStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleTHPSplitStorm detects high frequency of 2MB Transparent Huge Pages being split into 4KB pages.
 type RuleTHPSplitStorm struct{ noSuppression }
 
-func (r *RuleTHPSplitStorm) ID() string           { return "EDGE_THP_SPLIT_STORM" }
+func (r *RuleTHPSplitStorm) ID() string { return "EDGE_THP_SPLIT_STORM" }
+func (r *RuleTHPSplitStorm) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTHPSplitStorm) Tier() int            { return 3 }
 func (r *RuleTHPSplitStorm) IsPIDDependent() bool { return false }
 
@@ -933,7 +1728,10 @@ func (r *RuleTHPSplitStorm) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, 
 // RuleKHugepagedCPUBurn detects CPU thrashing by background hugepage defragmentation daemon khugepaged.
 type RuleKHugepagedCPUBurn struct{ noSuppression }
 
-func (r *RuleKHugepagedCPUBurn) ID() string           { return "EDGE_KHUGEPAGED_CPU_BURN" }
+func (r *RuleKHugepagedCPUBurn) ID() string { return "EDGE_KHUGEPAGED_CPU_BURN" }
+func (r *RuleKHugepagedCPUBurn) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleKHugepagedCPUBurn) Tier() int            { return 3 }
 func (r *RuleKHugepagedCPUBurn) IsPIDDependent() bool { return true }
 
@@ -974,7 +1772,10 @@ func (r *RuleKHugepagedCPUBurn) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleDiskDeviceIOErrHang detects disk block devices stalled with inflight requests and zero throughput.
 type RuleDiskDeviceIOErrHang struct{ noSuppression }
 
-func (r *RuleDiskDeviceIOErrHang) ID() string           { return "EDGE_DISK_DEVICE_IOERR_HANG" }
+func (r *RuleDiskDeviceIOErrHang) ID() string { return "EDGE_DISK_DEVICE_IOERR_HANG" }
+func (r *RuleDiskDeviceIOErrHang) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleDiskDeviceIOErrHang) Tier() int            { return 3 }
 func (r *RuleDiskDeviceIOErrHang) IsPIDDependent() bool { return false }
 
@@ -1006,7 +1807,10 @@ func (r *RuleDiskDeviceIOErrHang) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleKcompactdCPUSpin detects background proactive memory compaction daemon kcompactd spinning on fragmented memory.
 type RuleKcompactdCPUSpin struct{ noSuppression }
 
-func (r *RuleKcompactdCPUSpin) ID() string           { return "EDGE_KCOMPACTD_CPU_SPIN" }
+func (r *RuleKcompactdCPUSpin) ID() string { return "EDGE_KCOMPACTD_CPU_SPIN" }
+func (r *RuleKcompactdCPUSpin) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleKcompactdCPUSpin) Tier() int            { return 3 }
 func (r *RuleKcompactdCPUSpin) IsPIDDependent() bool { return true }
 
@@ -1047,7 +1851,10 @@ func (r *RuleKcompactdCPUSpin) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleMinFreeKbytesStall detects undersized min_free_kbytes causing sudden allocation bursts to hit direct reclaim stalls.
 type RuleMinFreeKbytesStall struct{ noSuppression }
 
-func (r *RuleMinFreeKbytesStall) ID() string           { return "EDGE_MIN_FREE_KBYTES_STALL" }
+func (r *RuleMinFreeKbytesStall) ID() string { return "EDGE_MIN_FREE_KBYTES_STALL" }
+func (r *RuleMinFreeKbytesStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleMinFreeKbytesStall) Tier() int            { return 3 }
 func (r *RuleMinFreeKbytesStall) IsPIDDependent() bool { return false }
 
@@ -1085,7 +1892,10 @@ func (r *RuleMinFreeKbytesStall) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleCorePatternPipeStall detects processes stuck in coredump waiting on dead or hung user-space core dumper helper.
 type RuleCorePatternPipeStall struct{ noSuppression }
 
-func (r *RuleCorePatternPipeStall) ID() string           { return "EDGE_CORE_PATTERN_PIPE_STALL" }
+func (r *RuleCorePatternPipeStall) ID() string { return "EDGE_CORE_PATTERN_PIPE_STALL" }
+func (r *RuleCorePatternPipeStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCorePatternPipeStall) Tier() int            { return 3 }
 func (r *RuleCorePatternPipeStall) IsPIDDependent() bool { return true }
 
@@ -1128,7 +1938,10 @@ func (r *RuleCorePatternPipeStall) Evaluate(diff *collector.SnapshotDiff) (*Diag
 // RuleTCPPAWSDrop detects valid TCP packets dropped due to PAWS timestamp collisions behind NAT.
 type RuleTCPPAWSDrop struct{ noSuppression }
 
-func (r *RuleTCPPAWSDrop) ID() string           { return "EDGE_TCP_PAWS_DROP" }
+func (r *RuleTCPPAWSDrop) ID() string { return "EDGE_TCP_PAWS_DROP" }
+func (r *RuleTCPPAWSDrop) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTCPPAWSDrop) Tier() int            { return 3 }
 func (r *RuleTCPPAWSDrop) IsPIDDependent() bool { return false }
 
@@ -1161,7 +1974,10 @@ func (r *RuleTCPPAWSDrop) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bo
 // RuleCMAZoneExhaustion detects Contiguous Memory Allocator (CMA) pool depletion.
 type RuleCMAZoneExhaustion struct{ noSuppression }
 
-func (r *RuleCMAZoneExhaustion) ID() string           { return "EDGE_CMA_ZONE_EXHAUSTION" }
+func (r *RuleCMAZoneExhaustion) ID() string { return "EDGE_CMA_ZONE_EXHAUSTION" }
+func (r *RuleCMAZoneExhaustion) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCMAZoneExhaustion) Tier() int            { return 3 }
 func (r *RuleCMAZoneExhaustion) IsPIDDependent() bool { return false }
 
@@ -1192,7 +2008,10 @@ func (r *RuleCMAZoneExhaustion) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleLoopDeviceSerialization detects I/O bottlenecks on loopback block devices.
 type RuleLoopDeviceSerialization struct{ noSuppression }
 
-func (r *RuleLoopDeviceSerialization) ID() string           { return "EDGE_LOOP_DEVICE_SERIALIZATION" }
+func (r *RuleLoopDeviceSerialization) ID() string { return "EDGE_LOOP_DEVICE_SERIALIZATION" }
+func (r *RuleLoopDeviceSerialization) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleLoopDeviceSerialization) Tier() int            { return 3 }
 func (r *RuleLoopDeviceSerialization) IsPIDDependent() bool { return false }
 
@@ -1224,7 +2043,10 @@ func (r *RuleLoopDeviceSerialization) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleRTSchedThrottling detects real-time priority tasks throttled by kernel sched_rt_runtime_us limit.
 type RuleRTSchedThrottling struct{ noSuppression }
 
-func (r *RuleRTSchedThrottling) ID() string           { return "EDGE_RT_SCHED_THROTTLING" }
+func (r *RuleRTSchedThrottling) ID() string { return "EDGE_RT_SCHED_THROTTLING" }
+func (r *RuleRTSchedThrottling) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleRTSchedThrottling) Tier() int            { return 3 }
 func (r *RuleRTSchedThrottling) IsPIDDependent() bool { return true }
 
@@ -1266,7 +2088,10 @@ func (r *RuleRTSchedThrottling) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleNumaAutoBalancingScanStall detects excessive CPU overhead from automatic NUMA page table scanning.
 type RuleNumaAutoBalancingScanStall struct{ noSuppression }
 
-func (r *RuleNumaAutoBalancingScanStall) ID() string           { return "EDGE_NUMA_AUTO_BALANCING_SCAN_STALL" }
+func (r *RuleNumaAutoBalancingScanStall) ID() string { return "EDGE_NUMA_AUTO_BALANCING_SCAN_STALL" }
+func (r *RuleNumaAutoBalancingScanStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNumaAutoBalancingScanStall) Tier() int            { return 3 }
 func (r *RuleNumaAutoBalancingScanStall) IsPIDDependent() bool { return false }
 
@@ -1299,7 +2124,10 @@ func (r *RuleNumaAutoBalancingScanStall) Evaluate(diff *collector.SnapshotDiff) 
 // RuleInotifyQueueOverflow detects when inotify event queues are undersized for high-concurrency file watchers.
 type RuleInotifyQueueOverflow struct{ noSuppression }
 
-func (r *RuleInotifyQueueOverflow) ID() string           { return "EDGE_INOTIFY_QUEUE_OVERFLOW" }
+func (r *RuleInotifyQueueOverflow) ID() string { return "EDGE_INOTIFY_QUEUE_OVERFLOW" }
+func (r *RuleInotifyQueueOverflow) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleInotifyQueueOverflow) Tier() int            { return 3 }
 func (r *RuleInotifyQueueOverflow) IsPIDDependent() bool { return false }
 
@@ -1340,7 +2168,10 @@ func (r *RuleInotifyQueueOverflow) Evaluate(diff *collector.SnapshotDiff) (*Diag
 // RuleCgroupCFSBurstStarvation detects latency degradation when container CPU burst credit is exhausted.
 type RuleCgroupCFSBurstStarvation struct{ noSuppression }
 
-func (r *RuleCgroupCFSBurstStarvation) ID() string           { return "EDGE_CGROUP_CFS_BURST_STARVATION" }
+func (r *RuleCgroupCFSBurstStarvation) ID() string { return "EDGE_CGROUP_CFS_BURST_STARVATION" }
+func (r *RuleCgroupCFSBurstStarvation) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCgroupCFSBurstStarvation) Tier() int            { return 3 }
 func (r *RuleCgroupCFSBurstStarvation) IsPIDDependent() bool { return true }
 
@@ -1399,7 +2230,10 @@ func (r *RuleCgroupCFSBurstStarvation) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleZswapCompressorContention detects CPU and memory stalls in Linux Zswap compression pools.
 type RuleZswapCompressorContention struct{ noSuppression }
 
-func (r *RuleZswapCompressorContention) ID() string           { return "EDGE_ZSWAP_COMPRESSOR_CONTENTION" }
+func (r *RuleZswapCompressorContention) ID() string { return "EDGE_ZSWAP_COMPRESSOR_CONTENTION" }
+func (r *RuleZswapCompressorContention) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleZswapCompressorContention) Tier() int            { return 3 }
 func (r *RuleZswapCompressorContention) IsPIDDependent() bool { return false }
 
@@ -1436,7 +2270,10 @@ func (r *RuleZswapCompressorContention) Evaluate(diff *collector.SnapshotDiff) (
 // RuleNetIfaceCarrierFlap detects physical network interface link flapping and transmission errors.
 type RuleNetIfaceCarrierFlap struct{ noSuppression }
 
-func (r *RuleNetIfaceCarrierFlap) ID() string           { return "EDGE_NET_IFACE_CARRIER_FLAP" }
+func (r *RuleNetIfaceCarrierFlap) ID() string { return "EDGE_NET_IFACE_CARRIER_FLAP" }
+func (r *RuleNetIfaceCarrierFlap) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNetIfaceCarrierFlap) Tier() int            { return 3 }
 func (r *RuleNetIfaceCarrierFlap) IsPIDDependent() bool { return false }
 
@@ -1480,7 +2317,10 @@ func (r *RuleNetIfaceCarrierFlap) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleTHPAllocFallbackStall detects Transparent HugePage direct allocation failures splitting to 4KB pages.
 type RuleTHPAllocFallbackStall struct{ noSuppression }
 
-func (r *RuleTHPAllocFallbackStall) ID() string           { return "EDGE_THP_ALLOC_FALLBACK_STALL" }
+func (r *RuleTHPAllocFallbackStall) ID() string { return "EDGE_THP_ALLOC_FALLBACK_STALL" }
+func (r *RuleTHPAllocFallbackStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTHPAllocFallbackStall) Tier() int            { return 3 }
 func (r *RuleTHPAllocFallbackStall) IsPIDDependent() bool { return false }
 
@@ -1518,7 +2358,10 @@ func (r *RuleTHPAllocFallbackStall) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleSchedMigrationBounce detects aggressive CPU scheduler cross-NUMA task bouncing.
 type RuleSchedMigrationBounce struct{ noSuppression }
 
-func (r *RuleSchedMigrationBounce) ID() string           { return "EDGE_SCHED_MIGRATION_BOUNCE" }
+func (r *RuleSchedMigrationBounce) ID() string { return "EDGE_SCHED_MIGRATION_BOUNCE" }
+func (r *RuleSchedMigrationBounce) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleSchedMigrationBounce) Tier() int            { return 3 }
 func (r *RuleSchedMigrationBounce) IsPIDDependent() bool { return false }
 
@@ -1558,7 +2401,10 @@ func (r *RuleSchedMigrationBounce) Evaluate(diff *collector.SnapshotDiff) (*Diag
 // RuleIPFragReasmDrops detects network IP fragment reassembly failures and timeouts.
 type RuleIPFragReasmDrops struct{ noSuppression }
 
-func (r *RuleIPFragReasmDrops) ID() string           { return "EDGE_IP_FRAG_REASM_DROPS" }
+func (r *RuleIPFragReasmDrops) ID() string { return "EDGE_IP_FRAG_REASM_DROPS" }
+func (r *RuleIPFragReasmDrops) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleIPFragReasmDrops) Tier() int            { return 3 }
 func (r *RuleIPFragReasmDrops) IsPIDDependent() bool { return false }
 
@@ -1601,7 +2447,10 @@ func (r *RuleIPFragReasmDrops) Evaluate(diff *collector.SnapshotDiff) (*Diagnosi
 // RuleCgroupV2FreezeHang detects containers or cgroups stalled in frozen state.
 type RuleCgroupV2FreezeHang struct{ noSuppression }
 
-func (r *RuleCgroupV2FreezeHang) ID() string           { return "EDGE_CGROUP_V2_FREEZE_HANG" }
+func (r *RuleCgroupV2FreezeHang) ID() string { return "EDGE_CGROUP_V2_FREEZE_HANG" }
+func (r *RuleCgroupV2FreezeHang) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCgroupV2FreezeHang) Tier() int            { return 3 }
 func (r *RuleCgroupV2FreezeHang) IsPIDDependent() bool { return true }
 
@@ -1651,7 +2500,10 @@ func (r *RuleCgroupV2FreezeHang) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleSysVShmSegmentLimit detects System V shared memory segment table capacity saturation.
 type RuleSysVShmSegmentLimit struct{ noSuppression }
 
-func (r *RuleSysVShmSegmentLimit) ID() string           { return "EDGE_SYSV_SHM_SEGMENT_LIMIT" }
+func (r *RuleSysVShmSegmentLimit) ID() string { return "EDGE_SYSV_SHM_SEGMENT_LIMIT" }
+func (r *RuleSysVShmSegmentLimit) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleSysVShmSegmentLimit) Tier() int            { return 3 }
 func (r *RuleSysVShmSegmentLimit) IsPIDDependent() bool { return false }
 
@@ -1706,7 +2558,10 @@ func (r *RuleSysVShmSegmentLimit) Evaluate(diff *collector.SnapshotDiff) (*Diagn
 // RuleNetDevRxNoBuffers detects network interface driver RX ring buffer depletion and missed frames.
 type RuleNetDevRxNoBuffers struct{ noSuppression }
 
-func (r *RuleNetDevRxNoBuffers) ID() string           { return "EDGE_NET_DEV_RX_NO_BUFFERS" }
+func (r *RuleNetDevRxNoBuffers) ID() string { return "EDGE_NET_DEV_RX_NO_BUFFERS" }
+func (r *RuleNetDevRxNoBuffers) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNetDevRxNoBuffers) Tier() int            { return 3 }
 func (r *RuleNetDevRxNoBuffers) IsPIDDependent() bool { return false }
 
@@ -1750,7 +2605,10 @@ func (r *RuleNetDevRxNoBuffers) Evaluate(diff *collector.SnapshotDiff) (*Diagnos
 // RuleTHPDefragAlways detects aggressive synchronous THP defragmentation mode.
 type RuleTHPDefragAlways struct{ noSuppression }
 
-func (r *RuleTHPDefragAlways) ID() string           { return "EDGE_TRANSPARENT_HUGEPAGE_DEFRAG_ALWAYS" }
+func (r *RuleTHPDefragAlways) ID() string { return "EDGE_TRANSPARENT_HUGEPAGE_DEFRAG_ALWAYS" }
+func (r *RuleTHPDefragAlways) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTHPDefragAlways) Tier() int            { return 3 }
 func (r *RuleTHPDefragAlways) IsPIDDependent() bool { return false }
 
@@ -1791,7 +2649,10 @@ func (r *RuleTHPDefragAlways) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis
 // RuleCgroupMemoryMaxOOMStall detects container memory.max hard limit reclaim stalls.
 type RuleCgroupMemoryMaxOOMStall struct{ noSuppression }
 
-func (r *RuleCgroupMemoryMaxOOMStall) ID() string           { return "EDGE_CGROUP_MEMORY_MAX_OOM_STALL" }
+func (r *RuleCgroupMemoryMaxOOMStall) ID() string { return "EDGE_CGROUP_MEMORY_MAX_OOM_STALL" }
+func (r *RuleCgroupMemoryMaxOOMStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCgroupMemoryMaxOOMStall) Tier() int            { return 3 }
 func (r *RuleCgroupMemoryMaxOOMStall) IsPIDDependent() bool { return true }
 
@@ -1847,7 +2708,10 @@ func (r *RuleCgroupMemoryMaxOOMStall) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleTHPScanExhaustionStall detects background khugepaged scanning exhaustion under memory fragmentation.
 type RuleTHPScanExhaustionStall struct{ noSuppression }
 
-func (r *RuleTHPScanExhaustionStall) ID() string           { return "EDGE_THP_SCAN_EXHAUSTION_STALL" }
+func (r *RuleTHPScanExhaustionStall) ID() string { return "EDGE_THP_SCAN_EXHAUSTION_STALL" }
+func (r *RuleTHPScanExhaustionStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTHPScanExhaustionStall) Tier() int            { return 3 }
 func (r *RuleTHPScanExhaustionStall) IsPIDDependent() bool { return false }
 
@@ -1881,7 +2745,10 @@ func (r *RuleTHPScanExhaustionStall) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleNetDevTxQueueTimeout detects network interface transmit queue watchdog timeouts and driver drops.
 type RuleNetDevTxQueueTimeout struct{ noSuppression }
 
-func (r *RuleNetDevTxQueueTimeout) ID() string           { return "EDGE_NET_DEV_TX_QUEUE_TIMEOUT" }
+func (r *RuleNetDevTxQueueTimeout) ID() string { return "EDGE_NET_DEV_TX_QUEUE_TIMEOUT" }
+func (r *RuleNetDevTxQueueTimeout) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNetDevTxQueueTimeout) Tier() int            { return 3 }
 func (r *RuleNetDevTxQueueTimeout) IsPIDDependent() bool { return false }
 
@@ -1925,7 +2792,10 @@ func (r *RuleNetDevTxQueueTimeout) Evaluate(diff *collector.SnapshotDiff) (*Diag
 // RuleCgroupCPUCorePinStarvation detects container processes pinned to a single overloaded CPU while host is idle.
 type RuleCgroupCPUCorePinStarvation struct{ noSuppression }
 
-func (r *RuleCgroupCPUCorePinStarvation) ID() string           { return "EDGE_CGROUP_CPU_CORE_PIN_STARVATION" }
+func (r *RuleCgroupCPUCorePinStarvation) ID() string { return "EDGE_CGROUP_CPU_CORE_PIN_STARVATION" }
+func (r *RuleCgroupCPUCorePinStarvation) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleCgroupCPUCorePinStarvation) Tier() int            { return 3 }
 func (r *RuleCgroupCPUCorePinStarvation) IsPIDDependent() bool { return true }
 
@@ -1975,7 +2845,10 @@ func (r *RuleCgroupCPUCorePinStarvation) Evaluate(diff *collector.SnapshotDiff) 
 // RuleHugeTLBVMAFaultMisalign detects virtual memory area unaligned HugeTLB faults and allocation fallbacks.
 type RuleHugeTLBVMAFaultMisalign struct{ noSuppression }
 
-func (r *RuleHugeTLBVMAFaultMisalign) ID() string           { return "EDGE_HUGETLB_VMA_MISALIGN_FAULT" }
+func (r *RuleHugeTLBVMAFaultMisalign) ID() string { return "EDGE_HUGETLB_VMA_MISALIGN_FAULT" }
+func (r *RuleHugeTLBVMAFaultMisalign) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleHugeTLBVMAFaultMisalign) Tier() int            { return 3 }
 func (r *RuleHugeTLBVMAFaultMisalign) IsPIDDependent() bool { return false }
 
@@ -2010,7 +2883,10 @@ func (r *RuleHugeTLBVMAFaultMisalign) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleTCPChronicRTOCollapse detects chronic TCP Retransmission Timeouts and congestion window collapse.
 type RuleTCPChronicRTOCollapse struct{ noSuppression }
 
-func (r *RuleTCPChronicRTOCollapse) ID() string           { return "EDGE_TCP_CHRONIC_RTO_COLLAPSE" }
+func (r *RuleTCPChronicRTOCollapse) ID() string { return "EDGE_TCP_CHRONIC_RTO_COLLAPSE" }
+func (r *RuleTCPChronicRTOCollapse) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTCPChronicRTOCollapse) Tier() int            { return 3 }
 func (r *RuleTCPChronicRTOCollapse) IsPIDDependent() bool { return false }
 
@@ -2050,7 +2926,10 @@ func (r *RuleTCPChronicRTOCollapse) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleMemcgSockMemoryThrottle detects container memory cgroup socket buffer charge throttling.
 type RuleMemcgSockMemoryThrottle struct{ noSuppression }
 
-func (r *RuleMemcgSockMemoryThrottle) ID() string           { return "EDGE_MEMCG_SOCK_MEMORY_THROTTLE" }
+func (r *RuleMemcgSockMemoryThrottle) ID() string { return "EDGE_MEMCG_SOCK_MEMORY_THROTTLE" }
+func (r *RuleMemcgSockMemoryThrottle) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleMemcgSockMemoryThrottle) Tier() int            { return 3 }
 func (r *RuleMemcgSockMemoryThrottle) IsPIDDependent() bool { return true }
 
@@ -2107,7 +2986,10 @@ func (r *RuleMemcgSockMemoryThrottle) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleTHPUseZeroPageSpin detects Transparent HugePage zero-page read-fault lock contention and CPU spin.
 type RuleTHPUseZeroPageSpin struct{ noSuppression }
 
-func (r *RuleTHPUseZeroPageSpin) ID() string           { return "EDGE_TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_SPIN" }
+func (r *RuleTHPUseZeroPageSpin) ID() string { return "EDGE_TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_SPIN" }
+func (r *RuleTHPUseZeroPageSpin) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleTHPUseZeroPageSpin) Tier() int            { return 3 }
 func (r *RuleTHPUseZeroPageSpin) IsPIDDependent() bool { return false }
 
@@ -2145,6 +3027,9 @@ type RuleSysfsCPUHotplugLockContention struct{ noSuppression }
 
 func (r *RuleSysfsCPUHotplugLockContention) ID() string {
 	return "EDGE_SYSFS_CPU_HOTPLUG_LOCK_CONTENTION"
+}
+func (r *RuleSysfsCPUHotplugLockContention) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
 }
 func (r *RuleSysfsCPUHotplugLockContention) Tier() int            { return 3 }
 func (r *RuleSysfsCPUHotplugLockContention) IsPIDDependent() bool { return true }
@@ -2193,6 +3078,9 @@ type RuleNetIPMulticastIGMPReportStall struct{ noSuppression }
 func (r *RuleNetIPMulticastIGMPReportStall) ID() string {
 	return "EDGE_NET_IP_MULTICAST_IGMP_REPORT_STALL"
 }
+func (r *RuleNetIPMulticastIGMPReportStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNetIPMulticastIGMPReportStall) Tier() int            { return 3 }
 func (r *RuleNetIPMulticastIGMPReportStall) IsPIDDependent() bool { return false }
 
@@ -2228,7 +3116,10 @@ func (r *RuleNetIPMulticastIGMPReportStall) Evaluate(diff *collector.SnapshotDif
 // RuleProcPIDTaskPthreadLimit detects processes approaching thread limits or exhaustion of thread resources.
 type RuleProcPIDTaskPthreadLimit struct{ noSuppression }
 
-func (r *RuleProcPIDTaskPthreadLimit) ID() string           { return "EDGE_PROC_PID_TASK_PTHREAD_LIMIT" }
+func (r *RuleProcPIDTaskPthreadLimit) ID() string { return "EDGE_PROC_PID_TASK_PTHREAD_LIMIT" }
+func (r *RuleProcPIDTaskPthreadLimit) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleProcPIDTaskPthreadLimit) Tier() int            { return 3 }
 func (r *RuleProcPIDTaskPthreadLimit) IsPIDDependent() bool { return true }
 
@@ -2273,7 +3164,10 @@ func (r *RuleProcPIDTaskPthreadLimit) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleZoneNormalFragmentation detects severe order-0 fragmentation in the Normal memory zone.
 type RuleZoneNormalFragmentation struct{ noSuppression }
 
-func (r *RuleZoneNormalFragmentation) ID() string           { return "EDGE_ZONE_NORMAL_FRAGMENTATION" }
+func (r *RuleZoneNormalFragmentation) ID() string { return "EDGE_ZONE_NORMAL_FRAGMENTATION" }
+func (r *RuleZoneNormalFragmentation) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleZoneNormalFragmentation) Tier() int            { return 3 }
 func (r *RuleZoneNormalFragmentation) IsPIDDependent() bool { return false }
 
@@ -2309,7 +3203,10 @@ func (r *RuleZoneNormalFragmentation) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleNetDevCarrierDownDrop detects packet transmission attempts over down or dormant network interfaces.
 type RuleNetDevCarrierDownDrop struct{ noSuppression }
 
-func (r *RuleNetDevCarrierDownDrop) ID() string           { return "EDGE_NET_DEV_CARRIER_DOWN_DROP" }
+func (r *RuleNetDevCarrierDownDrop) ID() string { return "EDGE_NET_DEV_CARRIER_DOWN_DROP" }
+func (r *RuleNetDevCarrierDownDrop) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNetDevCarrierDownDrop) Tier() int            { return 3 }
 func (r *RuleNetDevCarrierDownDrop) IsPIDDependent() bool { return false }
 
@@ -2342,7 +3239,10 @@ func (r *RuleNetDevCarrierDownDrop) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleProcPtracedStoppedStall detects processes stopped in 'T' / 't' state by debuggers or signals.
 type RuleProcPtracedStoppedStall struct{ noSuppression }
 
-func (r *RuleProcPtracedStoppedStall) ID() string           { return "EDGE_PROC_PTRACED_STOPPED_STALL" }
+func (r *RuleProcPtracedStoppedStall) ID() string { return "EDGE_PROC_PTRACED_STOPPED_STALL" }
+func (r *RuleProcPtracedStoppedStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleProcPtracedStoppedStall) Tier() int            { return 3 }
 func (r *RuleProcPtracedStoppedStall) IsPIDDependent() bool { return true }
 
@@ -2380,7 +3280,10 @@ func (r *RuleProcPtracedStoppedStall) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleMemSlabDentryPressure detects unevictable or bloated slab dentry/inode caches causing memory scan pressure.
 type RuleMemSlabDentryPressure struct{ noSuppression }
 
-func (r *RuleMemSlabDentryPressure) ID() string           { return "EDGE_MEM_SLAB_DENTRY_PRESSURE" }
+func (r *RuleMemSlabDentryPressure) ID() string { return "EDGE_MEM_SLAB_DENTRY_PRESSURE" }
+func (r *RuleMemSlabDentryPressure) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleMemSlabDentryPressure) Tier() int            { return 3 }
 func (r *RuleMemSlabDentryPressure) IsPIDDependent() bool { return false }
 
@@ -2416,7 +3319,10 @@ func (r *RuleMemSlabDentryPressure) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleNetIPReasmTimeoutStall detects fragmented IP packet reassembly timer expirations.
 type RuleNetIPReasmTimeoutStall struct{ noSuppression }
 
-func (r *RuleNetIPReasmTimeoutStall) ID() string           { return "EDGE_NET_IP_REASM_TIMEOUT_STALL" }
+func (r *RuleNetIPReasmTimeoutStall) ID() string { return "EDGE_NET_IP_REASM_TIMEOUT_STALL" }
+func (r *RuleNetIPReasmTimeoutStall) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNetIPReasmTimeoutStall) Tier() int            { return 3 }
 func (r *RuleNetIPReasmTimeoutStall) IsPIDDependent() bool { return false }
 
@@ -2452,7 +3358,10 @@ func (r *RuleNetIPReasmTimeoutStall) Evaluate(diff *collector.SnapshotDiff) (*Di
 // RuleMemMinWatermarkBounce detects kernel page allocator bouncing on low watermarks without triggering direct stalls.
 type RuleMemMinWatermarkBounce struct{ noSuppression }
 
-func (r *RuleMemMinWatermarkBounce) ID() string           { return "EDGE_MEM_MIN_WATERMARK_BOUNCE" }
+func (r *RuleMemMinWatermarkBounce) ID() string { return "EDGE_MEM_MIN_WATERMARK_BOUNCE" }
+func (r *RuleMemMinWatermarkBounce) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleMemMinWatermarkBounce) Tier() int            { return 3 }
 func (r *RuleMemMinWatermarkBounce) IsPIDDependent() bool { return false }
 
@@ -2488,7 +3397,10 @@ func (r *RuleMemMinWatermarkBounce) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleProcCommSwitchTruncation detects high thread churn with process command renaming and truncation.
 type RuleProcCommSwitchTruncation struct{ noSuppression }
 
-func (r *RuleProcCommSwitchTruncation) ID() string           { return "EDGE_PROC_COMM_SWITCH_TRUNCATION" }
+func (r *RuleProcCommSwitchTruncation) ID() string { return "EDGE_PROC_COMM_SWITCH_TRUNCATION" }
+func (r *RuleProcCommSwitchTruncation) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleProcCommSwitchTruncation) Tier() int            { return 3 }
 func (r *RuleProcCommSwitchTruncation) IsPIDDependent() bool { return true }
 
@@ -2522,7 +3434,10 @@ func (r *RuleProcCommSwitchTruncation) Evaluate(diff *collector.SnapshotDiff) (*
 // RuleEpollPollTimeoutBurst detects worker threads repeatedly timing out in epoll without handling requests.
 type RuleEpollPollTimeoutBurst struct{ noSuppression }
 
-func (r *RuleEpollPollTimeoutBurst) ID() string           { return "EDGE_EPOLL_POLL_TIMEOUT_BURST" }
+func (r *RuleEpollPollTimeoutBurst) ID() string { return "EDGE_EPOLL_POLL_TIMEOUT_BURST" }
+func (r *RuleEpollPollTimeoutBurst) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleEpollPollTimeoutBurst) Tier() int            { return 3 }
 func (r *RuleEpollPollTimeoutBurst) IsPIDDependent() bool { return true }
 
@@ -2556,7 +3471,10 @@ func (r *RuleEpollPollTimeoutBurst) Evaluate(diff *collector.SnapshotDiff) (*Dia
 // RuleNetTCPSynFloodDrop detects TCP SYN cookie drops and failures during network flood attacks.
 type RuleNetTCPSynFloodDrop struct{ noSuppression }
 
-func (r *RuleNetTCPSynFloodDrop) ID() string           { return "EDGE_NET_TCP_SYN_FLOOD_DROP" }
+func (r *RuleNetTCPSynFloodDrop) ID() string { return "EDGE_NET_TCP_SYN_FLOOD_DROP" }
+func (r *RuleNetTCPSynFloodDrop) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleNetTCPSynFloodDrop) Tier() int            { return 3 }
 func (r *RuleNetTCPSynFloodDrop) IsPIDDependent() bool { return false }
 
@@ -2590,7 +3508,10 @@ func (r *RuleNetTCPSynFloodDrop) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 // RuleSysfsPowerThrottleEvent detects power capping or RAPL thermal throttle events on CPU packages.
 type RuleSysfsPowerThrottleEvent struct{ noSuppression }
 
-func (r *RuleSysfsPowerThrottleEvent) ID() string           { return "EDGE_SYSFS_POWER_THROTTLE_EVENT" }
+func (r *RuleSysfsPowerThrottleEvent) ID() string { return "EDGE_SYSFS_POWER_THROTTLE_EVENT" }
+func (r *RuleSysfsPowerThrottleEvent) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleSysfsPowerThrottleEvent) Tier() int            { return 3 }
 func (r *RuleSysfsPowerThrottleEvent) IsPIDDependent() bool { return false }
 
@@ -2632,7 +3553,10 @@ func (r *RuleSysfsPowerThrottleEvent) Evaluate(diff *collector.SnapshotDiff) (*D
 // RuleProcZombieParentDeadlock detects supervisor/parent processes stuck in wait4 failing to reap zombie children.
 type RuleProcZombieParentDeadlock struct{ noSuppression }
 
-func (r *RuleProcZombieParentDeadlock) ID() string           { return "EDGE_PROC_ZOMBIE_PARENT_DEADLOCK" }
+func (r *RuleProcZombieParentDeadlock) ID() string { return "EDGE_PROC_ZOMBIE_PARENT_DEADLOCK" }
+func (r *RuleProcZombieParentDeadlock) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
 func (r *RuleProcZombieParentDeadlock) Tier() int            { return 3 }
 func (r *RuleProcZombieParentDeadlock) IsPIDDependent() bool { return true }
 
@@ -2672,4 +3596,150 @@ func (r *RuleProcZombieParentDeadlock) Evaluate(diff *collector.SnapshotDiff) (*
 	}
 
 	return nil, false
+}
+
+// RuleIOSchedulerMismatch detects block devices running suboptimal I/O schedulers with measurable queue latency.
+type RuleIOSchedulerMismatch struct{ noSuppression }
+
+func (r *RuleIOSchedulerMismatch) ID() string           { return "EDGE_IO_SCHEDULER_MISMATCH" }
+func (r *RuleIOSchedulerMismatch) Tier() int            { return 3 }
+func (r *RuleIOSchedulerMismatch) IsPIDDependent() bool { return false }
+func (r *RuleIOSchedulerMismatch) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
+
+func (r *RuleIOSchedulerMismatch) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || len(diff.Disks) == 0 {
+		return nil, false
+	}
+
+	for _, dev := range diff.Disks {
+		if dev.Scheduler == "" {
+			continue
+		}
+
+		sched := strings.ToLower(dev.Scheduler)
+		isMismatch := false
+		var mismatchDesc string
+
+		if !dev.Rotational && sched == "bfq" {
+			isMismatch = true
+			mismatchDesc = fmt.Sprintf("SSD/NVMe device %s is using 'bfq' budget-queueing scheduler intended for rotating media", dev.DeviceName)
+		} else if dev.Rotational && sched == "none" {
+			isMismatch = true
+			mismatchDesc = fmt.Sprintf("Rotational HDD device %s is using 'none' scheduler without I/O elevator sorting", dev.DeviceName)
+		}
+
+		if isMismatch && dev.AvgQueueLatencyMS > 20.0 {
+			diag := &Diagnosis{
+				RuleID:      r.ID(),
+				Tier:        3,
+				Severity:    SeverityMedium,
+				Confidence:  0.70,
+				Title:       "I/O Scheduler Device Mismatch",
+				Explanation: fmt.Sprintf("Storage device %s has a suboptimal I/O scheduler (%s) and is experiencing %.1fms queue latency.", dev.DeviceName, dev.Scheduler, dev.AvgQueueLatencyMS),
+				Evidence: []string{
+					mismatchDesc,
+					fmt.Sprintf("Device %s queue latency: %.1fms (threshold > 20.0ms)", dev.DeviceName, dev.AvgQueueLatencyMS),
+					fmt.Sprintf("Rotational: %v, Active Scheduler: [%s]", dev.Rotational, dev.Scheduler),
+				},
+				Remediation: fmt.Sprintf("Change I/O scheduler: echo %s > /sys/block/%s/queue/scheduler",
+					optimalScheduler(dev.Rotational), dev.DeviceName),
+			}
+			return diag, true
+		}
+	}
+
+	return nil, false
+}
+
+func optimalScheduler(rotational bool) string {
+	if rotational {
+		return "mq-deadline"
+	}
+	return "none"
+}
+
+// RuleOOMImmuneMemoryHog detects non-system processes with OOM score adjustment -1000 hoarding significant memory during system pressure.
+type RuleOOMImmuneMemoryHog struct{ noSuppression }
+
+func (r *RuleOOMImmuneMemoryHog) ID() string           { return "EDGE_OOM_IMMUNE_MEMORY_HOG" }
+func (r *RuleOOMImmuneMemoryHog) Tier() int            { return 3 }
+func (r *RuleOOMImmuneMemoryHog) IsPIDDependent() bool { return true }
+func (r *RuleOOMImmuneMemoryHog) Explain() RuleExplanation {
+	return tier3Explanations[r.ID()]
+}
+
+var oomWhitelistedComms = map[string]bool{
+	"systemd":    true,
+	"init":       true,
+	"sshd":       true,
+	"kubelet":    true,
+	"containerd": true,
+	"dockerd":    true,
+	"journald":   true,
+}
+
+func (r *RuleOOMImmuneMemoryHog) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || diff.LatestSnapshot == nil || len(diff.Processes) == 0 {
+		return nil, false
+	}
+
+	mem := &diff.LatestSnapshot.Memory
+	if mem.MemTotal == 0 {
+		return nil, false
+	}
+
+	memTotalBytes := mem.MemTotal * 1024
+	rssThreshold := uint64(float64(memTotalBytes) * 0.30)
+
+	memAvailRatio := float64(mem.MemAvailable) / float64(mem.MemTotal)
+	if memAvailRatio >= 0.15 {
+		return nil, false
+	}
+
+	var hog *collector.ProcessDiff
+	for i := range diff.Processes {
+		p := &diff.Processes[i]
+		if p.OOMScoreAdj != -1000 {
+			continue
+		}
+		if oomWhitelistedComms[p.Comm] {
+			continue
+		}
+		if p.RSSBytes > rssThreshold {
+			if hog == nil || p.RSSBytes > hog.RSSBytes {
+				hog = p
+			}
+		}
+	}
+
+	if hog == nil {
+		return nil, false
+	}
+
+	hogMB := float64(hog.RSSBytes) / (1024 * 1024)
+	totalMB := float64(memTotalBytes) / (1024 * 1024)
+	availMB := float64(mem.MemAvailable) / 1024
+	rssPercent := (float64(hog.RSSBytes) / float64(memTotalBytes)) * 100.0
+
+	diag := &Diagnosis{
+		RuleID:      r.ID(),
+		Tier:        3,
+		Severity:    SeverityHigh,
+		Confidence:  0.80,
+		Title:       "OOM-Immune Memory Hog Process",
+		Explanation: fmt.Sprintf("Process %s (PID %d) is OOM-immune (oom_score_adj=-1000) and consuming %.1f%% of RAM during memory pressure.", hog.Comm, hog.PID, rssPercent),
+		Evidence: []string{
+			fmt.Sprintf("PID %d [%s] oom_score_adj=-1000 (OOM killer protection)", hog.PID, hog.Comm),
+			fmt.Sprintf("Process RSS: %.1f MB (%.1f%% of %.1f MB MemTotal, threshold > 30.0%%)", hogMB, rssPercent, totalMB),
+			fmt.Sprintf("MemAvailable: %.1f MB (%.1f%% of total, threshold < 15.0%%)", availMB, memAvailRatio*100.0),
+		},
+		CulpritPID:     hog.PID,
+		CulpritName:    hog.Comm,
+		CulpritDetails: fmt.Sprintf("Consuming %.1f MB (%.1f%% RAM) with oom_score_adj=-1000", hogMB, rssPercent),
+		Remediation:    fmt.Sprintf("Reset process OOM adjustment or investigate leak: echo 0 > /proc/%d/oom_score_adj", hog.PID),
+	}
+
+	return diag, true
 }

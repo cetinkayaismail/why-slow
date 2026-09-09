@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,12 +59,13 @@ func ScanProcesses(ctx context.Context, procDir string) ([]ProcessInfo, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			buf := make([]byte, 4096)
 			for pid := range jobs {
 				select {
 				case <-ctx.Done():
 					return
 				default:
-					info, ok := readProcessInfo(procDir, pid)
+					info, ok := readProcessInfo(procDir, pid, buf)
 					if ok {
 						results <- info
 					}
@@ -86,6 +88,8 @@ func ScanProcesses(ctx context.Context, procDir string) ([]ProcessInfo, error) {
 	for info := range results {
 		collected = append(collected, info)
 	}
+
+	enrichTopRSSSmapsRollup(procDir, collected)
 
 	return collected, nil
 }
@@ -113,11 +117,31 @@ func discoverPIDs(procDir string) ([]int, error) {
 	return pids, nil
 }
 
-func readProcessInfo(procDir string, pid int) (ProcessInfo, bool) {
+func readFileWithBuf(path string, buf []byte) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	n, err := file.Read(buf)
+	if err != nil && n == 0 {
+		return nil, err
+	}
+	if n == len(buf) {
+		return os.ReadFile(path)
+	}
+	return buf[:n], nil
+}
+
+func readProcessInfo(procDir string, pid int, buf []byte) (ProcessInfo, bool) {
+	if len(buf) == 0 {
+		buf = make([]byte, 4096)
+	}
 	pidDir := filepath.Join(procDir, strconv.Itoa(pid))
 
 	statPath := filepath.Join(pidDir, "stat")
-	statBytes, err := os.ReadFile(statPath)
+	statBytes, err := readFileWithBuf(statPath, buf)
 	if err != nil {
 		return ProcessInfo{}, false
 	}
@@ -128,7 +152,7 @@ func readProcessInfo(procDir string, pid int) (ProcessInfo, bool) {
 	}
 
 	// Read wchan
-	if wchanBytes, err := os.ReadFile(filepath.Join(pidDir, "wchan")); err == nil {
+	if wchanBytes, err := readFileWithBuf(filepath.Join(pidDir, "wchan"), buf); err == nil {
 		wchan := strings.TrimSpace(string(wchanBytes))
 		if wchan != "0" {
 			info.Wchan = wchan
@@ -136,9 +160,16 @@ func readProcessInfo(procDir string, pid int) (ProcessInfo, bool) {
 	}
 
 	// Read oom_score
-	if oomBytes, err := os.ReadFile(filepath.Join(pidDir, "oom_score")); err == nil {
+	if oomBytes, err := readFileWithBuf(filepath.Join(pidDir, "oom_score"), buf); err == nil {
 		if val, err := strconv.Atoi(strings.TrimSpace(string(oomBytes))); err == nil {
 			info.OOMScore = val
+		}
+	}
+
+	// Read oom_score_adj
+	if adjBytes, err := readFileWithBuf(filepath.Join(pidDir, "oom_score_adj"), buf); err == nil {
+		if val, err := strconv.Atoi(strings.TrimSpace(string(adjBytes))); err == nil {
+			info.OOMScoreAdj = val
 		}
 	}
 
@@ -157,7 +188,7 @@ func readProcessInfo(procDir string, pid int) (ProcessInfo, bool) {
 	}
 
 	// Read cgroup path
-	readProcessCgroup(pidDir, &info)
+	readProcessCgroup(pidDir, &info, buf)
 
 	return info, true
 }
@@ -282,9 +313,9 @@ func readProcessLimits(pidDir string, info *ProcessInfo) {
 	}
 }
 
-func readProcessCgroup(pidDir string, info *ProcessInfo) {
+func readProcessCgroup(pidDir string, info *ProcessInfo, buf []byte) {
 	cgroupPath := filepath.Join(pidDir, "cgroup")
-	data, err := os.ReadFile(cgroupPath)
+	data, err := readFileWithBuf(cgroupPath, buf)
 	if err != nil {
 		return
 	}
@@ -358,4 +389,141 @@ func readProcessStatus(pidDir string, info *ProcessInfo) {
 			}
 		}
 	}
+}
+
+func probeSmapsAvailable(procDir string) bool {
+	probePath := filepath.Join(procDir, "self", "smaps_rollup")
+	_, err := os.Stat(probePath)
+	return err == nil
+}
+
+func enrichTopRSSSmapsRollup(procDir string, procs []ProcessInfo) {
+	if len(procs) == 0 || !probeSmapsAvailable(procDir) {
+		return
+	}
+
+	type procIndex struct {
+		idx int
+		rss uint64
+	}
+
+	indices := make([]procIndex, len(procs))
+	for i := range procs {
+		indices[i] = procIndex{idx: i, rss: procs[i].RSSBytes}
+	}
+
+	sort.Slice(indices, func(i, j int) bool {
+		return indices[i].rss > indices[j].rss
+	})
+
+	limit := 50
+	if limit > len(indices) {
+		limit = len(indices)
+	}
+
+	for i := 0; i < limit; i++ {
+		origIdx := indices[i].idx
+		path := filepath.Join(procDir, strconv.Itoa(procs[origIdx].PID), "smaps_rollup")
+		info, _ := ParseSmapsRollup(path)
+		procs[origIdx].SmapsRollup = info
+	}
+}
+
+// ParseSmapsRollup parses memory and swap statistics from /proc/[pid]/smaps_rollup.
+func ParseSmapsRollup(path string) (SmapsRollupInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return SmapsRollupInfo{Available: false}, nil
+	}
+	defer file.Close()
+
+	var info SmapsRollupInfo
+	info.Available = true
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		valFields := strings.Fields(parts[1])
+		if len(valFields) == 0 {
+			continue
+		}
+		val, err := strconv.ParseUint(valFields[0], 10, 64)
+		if err != nil {
+			continue
+		}
+
+		switch key {
+		case "Rss":
+			info.RSS = val
+		case "Pss":
+			info.PSS = val
+		case "Swap":
+			info.Swap = val
+		case "Shared_Clean":
+			info.SharedClean = val
+		case "Shared_Dirty":
+			info.SharedDirty = val
+		case "Private_Clean":
+			info.PrivateClean = val
+		case "Private_Dirty":
+			info.PrivateDirty = val
+		}
+	}
+	return info, nil
+}
+
+// ProcessFDTypeCounts holds breakdown of open file descriptors by kernel object type.
+type ProcessFDTypeCounts struct {
+	Sockets    int `json:"sockets"`
+	Pipes      int `json:"pipes"`
+	AnonInodes int `json:"anon_inodes"`
+	Files      int `json:"files"`
+	Other      int `json:"other"`
+	Total      int `json:"total"`
+}
+
+// CountProcessFDTypes inspects /proc/[pid]/fd/ and tallies open descriptor types without leaking path strings.
+func CountProcessFDTypes(procDir string, pid int) (ProcessFDTypeCounts, error) {
+	fdDir := filepath.Join(procDir, strconv.Itoa(pid), "fd")
+	dir, err := os.Open(fdDir)
+	if err != nil {
+		return ProcessFDTypeCounts{}, err
+	}
+	defer dir.Close()
+
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		return ProcessFDTypeCounts{}, err
+	}
+
+	var counts ProcessFDTypeCounts
+	counts.Total = len(names)
+
+	for _, name := range names {
+		linkPath := filepath.Join(fdDir, name)
+		target, err := os.Readlink(linkPath)
+		if err != nil {
+			counts.Other++
+			continue
+		}
+
+		if strings.HasPrefix(target, "socket:") {
+			counts.Sockets++
+		} else if strings.HasPrefix(target, "pipe:") {
+			counts.Pipes++
+		} else if strings.HasPrefix(target, "anon_inode:") {
+			counts.AnonInodes++
+		} else if strings.HasPrefix(target, "/") {
+			counts.Files++
+		} else {
+			counts.Other++
+		}
+	}
+
+	return counts, nil
 }

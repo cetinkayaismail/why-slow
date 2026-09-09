@@ -31,6 +31,7 @@ func TestEngineCleanSystem(t *testing.T) {
 
 func TestEngineRootCauseIsolation(t *testing.T) {
 	engine := NewEngine()
+	engine.DisableEarlyExit = true
 
 	// Multi-fault scenario:
 	// Tier 1: Disk HW saturation (nvme0n1 at 99%)
@@ -194,6 +195,7 @@ func TestEngineEnterpriseCompoundScenario(t *testing.T) {
 		},
 	}
 
+	engine.DisableEarlyExit = true
 	report := engine.Analyze(diff, collector.RunContext{IsRoot: true})
 	if report == nil || report.PrimaryBlocker == nil {
 		t.Fatalf("expected PrimaryBlocker to be diagnosed in compound scenario")
@@ -234,3 +236,192 @@ func TestEngineEnterpriseCompoundScenario(t *testing.T) {
 		t.Errorf("expected EDGE_IRQ_CORE_STORM in SecondaryIssues")
 	}
 }
+
+func TestEngineEarlyExit(t *testing.T) {
+	engine := NewEngine()
+
+	// 1. High confidence Tier 1 scenario: CPU saturation (Confidence >= 0.90)
+	diffHighConf := &collector.SnapshotDiff{
+		TotalCPUUtil: collector.CPUUtilization{IdlePercent: 0.1, BusyPercent: 99.9},
+		ProcsRunning: 32,
+		LatestSnapshot: &collector.SystemSnapshot{
+			CPU: collector.CPUStatInfo{
+				PerCore: []collector.CoreCPUStat{{ID: "cpu0"}, {ID: "cpu1"}},
+			},
+		},
+	}
+	report := engine.Analyze(diffHighConf, collector.RunContext{IsRoot: true})
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker to fire")
+	}
+	if report.PrimaryBlocker.Confidence < 0.90 {
+		t.Fatalf("expected Tier 1 confidence >= 0.90, got %f", report.PrimaryBlocker.Confidence)
+	}
+	if report.Tier3Evaluated {
+		t.Errorf("expected Tier3Evaluated to be false when Tier 1 confidence >= 0.90")
+	}
+
+	// 2. Clean system: Tier 1 does not fire, Tier 3 must be evaluated
+	diffClean := &collector.SnapshotDiff{
+		TotalCPUUtil: collector.CPUUtilization{IdlePercent: 95.0, BusyPercent: 5.0},
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory:      collector.MemInfo{MemTotal: 16000000, MemAvailable: 12000000},
+			Clocksource: collector.ClocksourceInfo{Current: "tsc"},
+		},
+	}
+	reportClean := engine.Analyze(diffClean, collector.RunContext{IsRoot: true})
+	if !reportClean.Tier3Evaluated {
+		t.Errorf("expected Tier3Evaluated to be true on clean system")
+	}
+}
+
+func TestEngineDisableRules(t *testing.T) {
+	engine := NewEngine()
+
+	err := engine.SetDisabledRules([]string{"NON_EXISTENT_RULE_XYZ"})
+	if err == nil {
+		t.Fatalf("expected error when disabling unknown rule, got nil")
+	}
+
+	ruleID := "BASE_DISK_HARDWARE_SATURATION"
+	if err := engine.SetDisabledRules([]string{ruleID}); err != nil {
+		t.Fatalf("failed to disable rule %s: %v", ruleID, err)
+	}
+
+	diff := &collector.SnapshotDiff{
+		Disks: []collector.DiskDeviceDiff{
+			{DeviceName: "sda", UtilPercent: 99.0, WriteBytesDelta: 500 * 1024 * 1024},
+		},
+	}
+	report := engine.Analyze(diff, collector.RunContext{IsRoot: true})
+	if report.PrimaryBlocker != nil && report.PrimaryBlocker.RuleID == ruleID {
+		t.Fatalf("rule %s was disabled but still triggered as primary blocker", ruleID)
+	}
+
+	if len(report.DisabledRules) != 1 || report.DisabledRules[0] != ruleID {
+		t.Errorf("expected report.DisabledRules to contain %s, got %v", ruleID, report.DisabledRules)
+	}
+}
+
+func TestRuleExplainAllRules(t *testing.T) {
+	engine := NewEngine()
+	rules := engine.Rules()
+	if len(rules) == 0 {
+		t.Fatalf("expected registered rules in engine, got 0")
+	}
+
+	for _, rule := range rules {
+		expl := rule.Explain()
+		if expl.Description == "" {
+			t.Errorf("rule %s has empty Description in Explain()", rule.ID())
+		}
+		if len(expl.KernelSources) == 0 {
+			t.Errorf("rule %s has no KernelSources in Explain()", rule.ID())
+		}
+	}
+}
+
+func TestEngineConfidenceCalibration(t *testing.T) {
+	engine := NewEngine()
+
+	// 1. Memory rule with High PSI (>20%) -> boosted by 1.10 (0.95 * 1.10 = 1.045 -> clamped to 1.0)
+	diffMemHigh := &collector.SnapshotDiff{
+		Duration: 1 * time.Second,
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{MemTotal: 10000000, MemAvailable: 200000}, // triggers BASE_OOM_DANGER (base conf 0.95)
+			PSI: collector.PSIInfo{
+				Available: true,
+				Memory:    collector.PSIResource{Some: collector.PSIMetrics{Avg10: 25.0}},
+			},
+		},
+	}
+	reportMemHigh := engine.Analyze(diffMemHigh, collector.RunContext{IsRoot: true})
+	if !reportMemHigh.Calibrated {
+		t.Errorf("expected report.Calibrated=true")
+	}
+	if reportMemHigh.PrimaryBlocker == nil || reportMemHigh.PrimaryBlocker.RuleID != "BASE_OOM_DANGER" {
+		t.Fatalf("expected BASE_OOM_DANGER primary blocker")
+	}
+	if reportMemHigh.PrimaryBlocker.Confidence != 1.0 {
+		t.Errorf("expected clamped confidence 1.0, got %f", reportMemHigh.PrimaryBlocker.Confidence)
+	}
+
+	// 2. Memory rule with Low PSI (<1%) -> demoted by 0.70 (0.95 * 0.70 = 0.665)
+	diffMemLow := &collector.SnapshotDiff{
+		Duration: 1 * time.Second,
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{MemTotal: 10000000, MemAvailable: 200000},
+			PSI: collector.PSIInfo{
+				Available: true,
+				Memory:    collector.PSIResource{Some: collector.PSIMetrics{Avg10: 0.2}},
+			},
+		},
+	}
+	reportMemLow := engine.Analyze(diffMemLow, collector.RunContext{IsRoot: true})
+	if reportMemLow.PrimaryBlocker.Confidence < 0.66 || reportMemLow.PrimaryBlocker.Confidence > 0.67 {
+		t.Errorf("expected demoted confidence ~0.665, got %f", reportMemLow.PrimaryBlocker.Confidence)
+	}
+
+	// 3. IO rule with High PSI (>20%) -> boosted by 1.10 (0.95 * 1.10 = 1.045 -> clamped to 1.0)
+	diffIOHigh := &collector.SnapshotDiff{
+		Duration: 1 * time.Second,
+		Disks: []collector.DiskDeviceDiff{
+			{DeviceName: "sda", UtilPercent: 99.0},
+		},
+		LatestSnapshot: &collector.SystemSnapshot{
+			PSI: collector.PSIInfo{
+				Available: true,
+				IO:        collector.PSIResource{Some: collector.PSIMetrics{Avg10: 30.0}},
+			},
+		},
+	}
+	reportIOHigh := engine.Analyze(diffIOHigh, collector.RunContext{IsRoot: true})
+	if reportIOHigh.PrimaryBlocker == nil || reportIOHigh.PrimaryBlocker.RuleID != "BASE_DISK_HARDWARE_SATURATION" {
+		t.Fatalf("expected BASE_DISK_HARDWARE_SATURATION primary blocker")
+	}
+	if reportIOHigh.PrimaryBlocker.Confidence != 1.0 {
+		t.Errorf("expected clamped confidence 1.0, got %f", reportIOHigh.PrimaryBlocker.Confidence)
+	}
+
+	// 4. CPU rule with Low PSI (<1%) -> demoted by 0.70 (0.95 * 0.70 = 0.665)
+	diffCPULow := &collector.SnapshotDiff{
+		Duration:     1 * time.Second,
+		TotalCPUUtil: collector.CPUUtilization{IdlePercent: 0.5, BusyPercent: 99.5},
+		ProcsRunning: 10,
+		LatestSnapshot: &collector.SystemSnapshot{
+			CPU: collector.CPUStatInfo{
+				PerCore: []collector.CoreCPUStat{{ID: "cpu0"}, {ID: "cpu1"}},
+			},
+			PSI: collector.PSIInfo{
+				Available: true,
+				CPU:       collector.PSIResource{Some: collector.PSIMetrics{Avg10: 0.5}},
+			},
+		},
+	}
+	reportCPULow := engine.Analyze(diffCPULow, collector.RunContext{IsRoot: true})
+	if reportCPULow.PrimaryBlocker == nil || reportCPULow.PrimaryBlocker.RuleID != "BASE_CPU_SATURATION" {
+		t.Fatalf("expected BASE_CPU_SATURATION primary blocker")
+	}
+	if reportCPULow.PrimaryBlocker.Confidence < 0.66 || reportCPULow.PrimaryBlocker.Confidence > 0.67 {
+		t.Errorf("expected demoted confidence ~0.665, got %f", reportCPULow.PrimaryBlocker.Confidence)
+	}
+
+	// 5. PSI unavailable -> no-op (confidence remains 0.95)
+	diffNoPSI := &collector.SnapshotDiff{
+		Duration: 1 * time.Second,
+		Disks: []collector.DiskDeviceDiff{
+			{DeviceName: "sda", UtilPercent: 99.0},
+		},
+		LatestSnapshot: &collector.SystemSnapshot{
+			PSI: collector.PSIInfo{Available: false},
+		},
+	}
+	reportNoPSI := engine.Analyze(diffNoPSI, collector.RunContext{IsRoot: true})
+	if reportNoPSI.Calibrated {
+		t.Errorf("expected report.Calibrated=false when PSI is not available")
+	}
+	if reportNoPSI.PrimaryBlocker.Confidence != 0.95 {
+		t.Errorf("expected original uncalibrated confidence 0.95, got %f", reportNoPSI.PrimaryBlocker.Confidence)
+	}
+}
+

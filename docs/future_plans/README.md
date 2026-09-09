@@ -12,6 +12,7 @@ This directory contains the detailed engineering specifications for the next maj
 | **02. Interactive Terminal UI** | [02_INTERACTIVE_TERMINAL_UI.md](02_INTERACTIVE_TERMINAL_UI.md) | Pure Go VT100/ANSI interactive TUI (`-i` / `--tui`) for live SSH debugging with drill-down modals and causal trees. |
 | **03. Human-in-the-Loop Remediation** | [03_HUMAN_IN_THE_LOOP_REMEDIATION.md](03_HUMAN_IN_THE_LOOP_REMEDIATION.md) | Safe interactive operator actions, pure syscall execution (zero shell injection), and tamper-evident audit logging. |
 | **04. Blast Radius Pre-Flight Safety** | [04_BLAST_RADIUS_PREFLIGHT_SAFETY.md](04_BLAST_RADIUS_PREFLIGHT_SAFETY.md) | 4-layer pre-flight safety inspector: protected process blacklist, child worker cascades, socket dependencies, and throttle-first principle. |
+| **05. Multi-Host Distributed Diagnostics** | [05_MULTI_HOST_DISTRIBUTED_DIAGNOSTICS.md](05_MULTI_HOST_DISTRIBUTED_DIAGNOSTICS.md) | Fleet-wide correlated root-cause analysis via SSH agent dispatcher, offline JSON merge, cross-host pattern detection, and label-aware group comparison. |
 
 ---
 

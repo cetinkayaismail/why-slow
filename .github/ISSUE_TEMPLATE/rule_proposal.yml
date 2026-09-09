@@ -1,0 +1,61 @@
+name: 💡 Diagnostic Rule Proposal
+description: Propose a new Linux kernel bottleneck rule or telemetry metric
+labels: ["enhancement", "rules"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to propose a new Linux kernel diagnostic rule or metric for `why-slow`.
+        Please verify that the proposed rule adheres to our invariants: zero external dependencies, zero writes, multi-signal corroboration.
+  - type: input
+    id: rule-id
+    attributes:
+      label: Proposed Rule Identifier
+      description: Follow naming conventions (e.g., `CONT_BCACHE_DIRTY_CONGESTION` or `EDGE_NVME_CMD_TIMEOUT`).
+      placeholder: "e.g., CONT_SCHED_MIGRATION_COST"
+    validations:
+      required: true
+  - type: dropdown
+    id: rule-tier
+    attributes:
+      label: Target Diagnostic Tier
+      description: Which tier does this bottleneck belong to?
+      options:
+        - "Tier 1: Base Hard Limits (P0 - Unrecoverable hardware / OS limits)"
+        - "Tier 2: Contention & Queues (P1 - Resource queues, saturation, backlogs)"
+        - "Tier 3: Subtle Kernel Edge Cases (P2 - Driver latency, locks, subtle anomalies)"
+    validations:
+      required: true
+  - type: input
+    id: kernel-subsystem
+    attributes:
+      label: Kernel Subsystem & Virtual Files
+      description: Which `/proc` or `/sys` virtual paths provide the telemetry?
+      placeholder: "e.g., /proc/sys/kernel/sched_*, /sys/block/*/queue/*"
+    validations:
+      required: true
+  - type: textarea
+    id: trigger-condition
+    attributes:
+      label: Trigger Conditions & Corroborating Signals
+      description: |
+        What mathematical or delta condition defines the bottleneck?
+        Remember our invariant: Every rule must corroborate at least 2 distinct signals before triggering with high confidence.
+      placeholder: "Signal 1: Device in-flight I/O > 128\nSignal 2: PSI I/O stall > 25%"
+    validations:
+      required: true
+  - type: textarea
+    id: false-positives
+    attributes:
+      label: Potential False Positives & Exclusions
+      description: When might this metric spike under completely normal workloads? How should we guard against false alerts?
+    validations:
+      required: true
+  - type: textarea
+    id: remediation
+    attributes:
+      label: Recommended Remediation
+      description: What concrete Linux terminal commands, sysctl tunables, or actions resolve this bottleneck?
+      placeholder: "e.g., echo 2 > /proc/sys/vm/drop_caches or sysctl -w net.core.somaxconn=4096"
+    validations:
+      required: true

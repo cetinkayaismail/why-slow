@@ -13,6 +13,7 @@ import (
 // Helper to run engine analysis in tests
 func analyzeSnapshotDiff(diff *collector.SnapshotDiff, isRoot bool) *analyzer.DiagnosticReport {
 	eng := analyzer.NewEngine()
+	eng.DisableEarlyExit = true
 	return eng.Analyze(diff, collector.RunContext{IsRoot: isRoot, EffectiveUID: 0})
 }
 
@@ -2547,3 +2548,177 @@ func TestDisambiguation_TCPCloseWaitLeak_vs_FDExhaustion(t *testing.T) {
 		t.Errorf("expected Tier 2 primary blocker, got tier %d", report.PrimaryBlocker.Tier)
 	}
 }
+
+func TestDisambiguation_OOMImmuneMemoryHog_vs_BaseOOMDanger(t *testing.T) {
+	const totalKB uint64 = 1000 * 1024
+	diff := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{
+				MemTotal:     totalKB,
+				MemAvailable: 20 * 1024,
+				SwapTotal:    0,
+				SwapFree:     0,
+			},
+		},
+		Processes: []collector.ProcessDiff{
+			{PID: 9999, Comm: "rogue_hog", OOMScoreAdj: -1000, RSSBytes: 450 * 1024 * 1024},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_OOM_DANGER" {
+		t.Errorf("expected BASE_OOM_DANGER as primary, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundHog := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "EDGE_OOM_IMMUNE_MEMORY_HOG" {
+			foundHog = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "EDGE_OOM_IMMUNE_MEMORY_HOG" {
+			foundHog = true
+			break
+		}
+	}
+	if !foundHog {
+		t.Errorf("expected EDGE_OOM_IMMUNE_MEMORY_HOG in secondary or contributing factors")
+	}
+}
+
+func TestDisambiguation_IOSchedulerMismatch_vs_BaseDiskSaturation(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		Disks: []collector.DiskDeviceDiff{
+			{
+				DeviceName:        "nvme0n1",
+				UtilPercent:       98.0,
+				Scheduler:         "bfq",
+				Rotational:        false,
+				AvgQueueLatencyMS: 30.0,
+				WriteBytesDelta:   200 * 1024 * 1024,
+			},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_DISK_HARDWARE_SATURATION" {
+		t.Errorf("expected BASE_DISK_HARDWARE_SATURATION as primary, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundSched := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "EDGE_IO_SCHEDULER_MISMATCH" {
+			foundSched = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "EDGE_IO_SCHEDULER_MISMATCH" {
+			foundSched = true
+			break
+		}
+	}
+	if !foundSched {
+		t.Errorf("expected EDGE_IO_SCHEDULER_MISMATCH in secondary or contributing factors")
+	}
+}
+
+func TestDisambiguation_ProcessSwapPinned_vs_BaseOOMDanger(t *testing.T) {
+	// Scenario: Tier 1 OOM danger (< 3% available RAM) while a process is swap pinned (>500MB swap)
+	diff := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:  901,
+				Comm: "swap_hog",
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available: true,
+					Swap:      750000, // 750 MB
+				},
+			},
+		},
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{
+				MemTotal:     10000000,
+				MemAvailable: 200000, // 2% < 3% -> triggers BASE_OOM_DANGER
+			},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_OOM_DANGER" {
+		t.Errorf("expected BASE_OOM_DANGER to dominate as primary blocker, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundSwapPinned := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_PROCESS_SWAP_PINNED" {
+			foundSwapPinned = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_PROCESS_SWAP_PINNED" {
+			foundSwapPinned = true
+			break
+		}
+	}
+	if !foundSwapPinned {
+		t.Errorf("expected CONT_PROCESS_SWAP_PINNED in contributing factors or secondary issues")
+	}
+}
+
+func TestDisambiguation_DentryCacheExplosion_vs_BaseOOMDanger(t *testing.T) {
+	// Scenario: Tier 1 OOM danger with massive dentry slab explosion (> 2M dentries)
+	diff := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			SystemConfig: collector.SystemConfigInfo{
+				Slab: collector.SlabInfo{
+					Available:         true,
+					DentryCacheActive: 2800000,
+					DentryCacheTotal:  2900000,
+				},
+			},
+			Memory: collector.MemInfo{
+				MemTotal:     16000000,
+				MemAvailable: 300000, // 1.87% < 3% -> triggers BASE_OOM_DANGER
+			},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_OOM_DANGER" {
+		t.Errorf("expected BASE_OOM_DANGER to dominate as primary blocker, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundDentry := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_DENTRY_CACHE_EXPLOSION" {
+			foundDentry = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_DENTRY_CACHE_EXPLOSION" {
+			foundDentry = true
+			break
+		}
+	}
+	if !foundDentry {
+		t.Errorf("expected CONT_DENTRY_CACHE_EXPLOSION in contributing factors or secondary issues")
+	}
+}
+

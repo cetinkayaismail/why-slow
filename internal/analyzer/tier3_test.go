@@ -2028,3 +2028,140 @@ func TestRuleProcZombieParentDeadlock(t *testing.T) {
 		t.Errorf("expected CulpritPID 10, got %d", diag.CulpritPID)
 	}
 }
+
+func TestRuleIOSchedulerMismatch(t *testing.T) {
+	rule := &RuleIOSchedulerMismatch{}
+
+	tests := []struct {
+		name       string
+		disks      []collector.DiskDeviceDiff
+		shouldFire bool
+	}{
+		{
+			name: "SSD with bfq and high latency fires",
+			disks: []collector.DiskDeviceDiff{
+				{DeviceName: "nvme0n1", Rotational: false, Scheduler: "bfq", AvgQueueLatencyMS: 25.0},
+			},
+			shouldFire: true,
+		},
+		{
+			name: "HDD with none and high latency fires",
+			disks: []collector.DiskDeviceDiff{
+				{DeviceName: "sda", Rotational: true, Scheduler: "none", AvgQueueLatencyMS: 30.0},
+			},
+			shouldFire: true,
+		},
+		{
+			name: "SSD with none is optimal",
+			disks: []collector.DiskDeviceDiff{
+				{DeviceName: "nvme0n1", Rotational: false, Scheduler: "none", AvgQueueLatencyMS: 25.0},
+			},
+			shouldFire: false,
+		},
+		{
+			name: "HDD with mq-deadline is optimal",
+			disks: []collector.DiskDeviceDiff{
+				{DeviceName: "sda", Rotational: true, Scheduler: "mq-deadline", AvgQueueLatencyMS: 25.0},
+			},
+			shouldFire: false,
+		},
+		{
+			name: "SSD with bfq but low latency does not fire",
+			disks: []collector.DiskDeviceDiff{
+				{DeviceName: "nvme0n1", Rotational: false, Scheduler: "bfq", AvgQueueLatencyMS: 15.0},
+			},
+			shouldFire: false,
+		},
+		{
+			name: "Missing scheduler does not fire",
+			disks: []collector.DiskDeviceDiff{
+				{DeviceName: "nvme0n1", Rotational: false, Scheduler: "", AvgQueueLatencyMS: 35.0},
+			},
+			shouldFire: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			diff := &collector.SnapshotDiff{Disks: tc.disks}
+			diag, fired := rule.Evaluate(diff)
+			if fired != tc.shouldFire {
+				t.Fatalf("expected fired=%v, got %v", tc.shouldFire, fired)
+			}
+			if fired && diag.Severity != SeverityMedium {
+				t.Errorf("expected SeverityMedium, got %v", diag.Severity)
+			}
+		})
+	}
+}
+
+func TestRuleOOMImmuneMemoryHog(t *testing.T) {
+	rule := &RuleOOMImmuneMemoryHog{}
+	const totalKB uint64 = 1000 * 1024
+
+	tests := []struct {
+		name       string
+		availKB    uint64
+		procs      []collector.ProcessDiff
+		shouldFire bool
+	}{
+		{
+			name:    "Immune hog consuming 40% RAM under pressure fires",
+			availKB: 100 * 1024,
+			procs: []collector.ProcessDiff{
+				{PID: 4000, Comm: "bad_hog", OOMScoreAdj: -1000, RSSBytes: 400 * 1024 * 1024},
+			},
+			shouldFire: true,
+		},
+		{
+			name:    "Whitelisted systemd is ignored",
+			availKB: 100 * 1024,
+			procs: []collector.ProcessDiff{
+				{PID: 1, Comm: "systemd", OOMScoreAdj: -1000, RSSBytes: 400 * 1024 * 1024},
+			},
+			shouldFire: false,
+		},
+		{
+			name:    "Non-immune process with normal oom_score_adj does not fire",
+			availKB: 100 * 1024,
+			procs: []collector.ProcessDiff{
+				{PID: 4001, Comm: "normal_proc", OOMScoreAdj: 0, RSSBytes: 400 * 1024 * 1024},
+			},
+			shouldFire: false,
+		},
+		{
+			name:    "Immune proc below 30% threshold does not fire",
+			availKB: 100 * 1024,
+			procs: []collector.ProcessDiff{
+				{PID: 4002, Comm: "small_proc", OOMScoreAdj: -1000, RSSBytes: 200 * 1024 * 1024},
+			},
+			shouldFire: false,
+		},
+		{
+			name:    "Immune hog without memory pressure does not fire",
+			availKB: 300 * 1024,
+			procs: []collector.ProcessDiff{
+				{PID: 4003, Comm: "bad_hog", OOMScoreAdj: -1000, RSSBytes: 400 * 1024 * 1024},
+			},
+			shouldFire: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			diff := &collector.SnapshotDiff{
+				LatestSnapshot: &collector.SystemSnapshot{
+					Memory: collector.MemInfo{MemTotal: totalKB, MemAvailable: tc.availKB},
+				},
+				Processes: tc.procs,
+			}
+			diag, fired := rule.Evaluate(diff)
+			if fired != tc.shouldFire {
+				t.Fatalf("expected fired=%v, got %v", tc.shouldFire, fired)
+			}
+			if fired && diag.Severity != SeverityHigh {
+				t.Errorf("expected SeverityHigh, got %v", diag.Severity)
+			}
+		})
+	}
+}
