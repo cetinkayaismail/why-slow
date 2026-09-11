@@ -2901,3 +2901,199 @@ func TestDisambiguation_IPCUnixPeer_vs_BaseCPUSaturation(t *testing.T) {
 		t.Errorf("expected CONT_IPC_UNIX_PEER_CONGESTION in contributing factors or secondary issues")
 	}
 }
+
+func TestDisambiguation_DirectReclaim_vs_BaseOOMDanger(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{
+				MemTotal:     16 * 1024 * 1024, // 16GB
+				MemAvailable: 200 * 1024,       // < 3% -> triggers BASE_OOM_DANGER
+				MemFree:      100 * 1024,
+			},
+			PSI: collector.PSIInfo{
+				Available: true,
+				Memory: collector.PSIResource{
+					Some: collector.PSIMetrics{Avg10: 45.0},
+					Full: collector.PSIMetrics{Avg10: 25.0},
+				},
+			},
+		},
+		VMStat: collector.VMStatDiff{
+			AllocStallDirectDelta: 500,
+			PgScanDirectDelta:     12000,
+		},
+		Processes: []collector.ProcessDiff{
+			{PID: 401, Comm: "leaker", Wchan: "alloc_pages_slowpath", RSSBytes: 15 * 1024 * 1024 * 1024},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_OOM_DANGER" {
+		t.Errorf("expected BASE_OOM_DANGER to dominate, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundReclaim := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_MEM_DIRECT_RECLAIM_STALL" {
+			foundReclaim = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_MEM_DIRECT_RECLAIM_STALL" {
+			foundReclaim = true
+			break
+		}
+	}
+	if !foundReclaim {
+		t.Errorf("expected CONT_MEM_DIRECT_RECLAIM_STALL in contributing factors or secondary issues")
+	}
+}
+
+func TestDisambiguation_RemoteStorageHang_vs_BaseDiskSpace(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			DiskSpace: collector.DiskSpaceInfo{
+				Mounts: []collector.MountSpaceInfo{
+					{Path: "/", TotalBytes: 100 * 1024 * 1024 * 1024, FreeBytes: 0, AvailBytes: 0, UsedPercent: 100.0},
+				},
+			},
+		},
+		Processes: []collector.ProcessDiff{
+			{PID: 501, Comm: "nfs_app", State: 'D', Wchan: "nfs_wait_bit_killable", CPUPercent: 0.0, CPUTimeDelta: 0},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_DISK_SPACE_FULL" {
+		t.Errorf("expected BASE_DISK_SPACE_FULL to dominate, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundRemote := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_REMOTE_STORAGE_RPC_HANG" {
+			foundRemote = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_REMOTE_STORAGE_RPC_HANG" {
+			foundRemote = true
+			break
+		}
+	}
+	if !foundRemote {
+		t.Errorf("expected CONT_REMOTE_STORAGE_RPC_HANG in contributing factors or secondary issues")
+	}
+}
+
+func TestDisambiguation_SpinlockBurn_vs_BaseCPUSaturation(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		TotalCPUUtil: collector.CPUUtilization{
+			BusyPercent:   100.0,
+			SystemPercent: 65.0,
+			UserPercent:   35.0,
+			IdlePercent:   0.0,
+		},
+		ProcsRunning: 16,
+		LatestSnapshot: &collector.SystemSnapshot{
+			CPU: collector.CPUStatInfo{
+				PerCore: []collector.CoreCPUStat{{ID: "cpu0"}, {ID: "cpu1"}},
+			},
+		},
+		Processes: []collector.ProcessDiff{
+			{
+				PID:                           601,
+				Comm:                          "spin_worker",
+				CPUPercent:                    98.0,
+				CPUTimeDelta:                  200,
+				STimeDelta:                    180,
+				UTimeDelta:                    20,
+				NonvoluntaryCtxtSwitchesDelta: 9000,
+			},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_CPU_SATURATION" {
+		t.Errorf("expected BASE_CPU_SATURATION to dominate, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundSpin := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_CPU_KERNEL_SPINLOCK_BURN" {
+			foundSpin = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_CPU_KERNEL_SPINLOCK_BURN" {
+			foundSpin = true
+			break
+		}
+	}
+	if !foundSpin {
+		t.Errorf("expected CONT_CPU_KERNEL_SPINLOCK_BURN in contributing factors or secondary issues")
+	}
+}
+
+func TestDisambiguation_CFSBurstThrottle_vs_BaseCPUSaturation(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		TotalCPUUtil: collector.CPUUtilization{
+			BusyPercent: 100.0,
+			UserPercent: 95.0,
+			IdlePercent: 0.0,
+		},
+		ProcsRunning: 16,
+		LatestSnapshot: &collector.SystemSnapshot{
+			CPU: collector.CPUStatInfo{
+				PerCore: []collector.CoreCPUStat{{ID: "cpu0"}, {ID: "cpu1"}},
+			},
+		},
+		Cgroups: []collector.CgroupDiff{
+			{
+				Path:               "/docker/api",
+				NrPeriodsDelta:     120,
+				NrThrottledDelta:   50,
+				ThrottledUsecDelta: 400000,
+			},
+		},
+		Processes: []collector.ProcessDiff{
+			{PID: 701, Comm: "api_proc", CgroupPath: "/docker/api", CPUPercent: 25.0},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_CPU_SATURATION" {
+		t.Errorf("expected BASE_CPU_SATURATION to dominate, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundCFS := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_CGROUP_CFS_BURST_THROTTLE" {
+			foundCFS = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_CGROUP_CFS_BURST_THROTTLE" {
+			foundCFS = true
+			break
+		}
+	}
+	if !foundCFS {
+		t.Errorf("expected CONT_CGROUP_CFS_BURST_THROTTLE in contributing factors or secondary issues")
+	}
+}

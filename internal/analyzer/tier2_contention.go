@@ -109,6 +109,10 @@ func GetTier2Rules() []Rule {
 		&RuleSecurityFanotifyStall{},
 		&RuleFileLockGraphBlocked{},
 		&RuleIPCUnixPeerCongestion{},
+		&RuleMemDirectReclaimStall{},
+		&RuleRemoteStorageRPCHang{},
+		&RuleCPUKernelSpinlockBurn{},
+		&RuleCgroupCFSBurstThrottle{},
 	}
 }
 
@@ -1119,6 +1123,58 @@ var tier2Explanations = map[string]RuleExplanation{
 			"/proc/[pid]/stat",
 		},
 		Remediation: "Investigate downstream Unix socket consumer daemon (e.g. logger, systemd-journald) or increase socket buffer limit (sysctl -w net.core.wmem_default=262144).",
+	},
+	"CONT_MEM_DIRECT_RECLAIM_STALL": {
+		Description: "Applications are stalling mid-syscall in direct memory reclaim scanning page LRU lists synchronously.",
+		Thresholds: []string{
+			"allocstall_direct > 0 AND pgscan_direct >= 100 in /proc/vmstat.",
+			"Corroborated by Memory PSI (some >= 10% or full >= 5%), low MemAvailable (< 10%), or process in alloc_pages_slowpath.",
+		},
+		KernelSources: []string{
+			"/proc/vmstat",
+			"/proc/pressure/memory",
+			"/proc/[pid]/wchan",
+			"/proc/meminfo",
+		},
+		Remediation: "Increase vm.min_free_kbytes to trigger background kswapd reclamation earlier, optimize memory usage, or add RAM.",
+	},
+	"CONT_REMOTE_STORAGE_RPC_HANG": {
+		Description: "Process is trapped in uninterruptible sleep awaiting an unresponsive remote NFS/CIFS storage RPC handshake.",
+		Thresholds: []string{
+			"Process in 'D' state with remote RPC wait channel ('nfs_wait_bit_killable', 'rpc_wait_bit_killable', etc.).",
+			"Process CPU utilization < 0.1% with zero CPU tick progression.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/status",
+			"/proc/[pid]/wchan",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "Verify remote NFS/CIFS server network connectivity, check storage firewall rules, or perform lazy unmount (umount -l).",
+	},
+	"CONT_CPU_KERNEL_SPINLOCK_BURN": {
+		Description: "Process is consuming high CPU where execution is dominated by kernel-mode spinlocks or failing syscall loops.",
+		Thresholds: []string{
+			"Process CPUPercent >= 75% AND (stime / (utime + stime)) >= 80%.",
+			"Corroborated by nonvoluntary context switches >= 5000 or host system CPU >= 40%.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/stat",
+			"/proc/[pid]/status",
+			"/proc/stat",
+		},
+		Remediation: "Profile process kernel call stacks using 'perf top -p <PID>' to identify contentious spinlocks or failing system call loops.",
+	},
+	"CONT_CGROUP_CFS_BURST_THROTTLE": {
+		Description: "Cgroup is being clamped by CFS CPU quota for >= 25% of scheduling periods due to bursty multi-threaded execution.",
+		Thresholds: []string{
+			"nr_periods >= 10 AND (nr_throttled / nr_periods) >= 25% in cgroup cpu.stat.",
+			"Corroborated by throttled_usec >= 150ms or CPU PSI some >= 15%.",
+		},
+		KernelSources: []string{
+			"/sys/fs/cgroup/.../cpu.stat",
+			"/proc/pressure/cpu",
+		},
+		Remediation: "Increase cgroup cpu.max quota limit, enable CFS burst headroom (cpu.max.burst / cpu.cfs_burst_us), or right-size worker thread pool concurrency.",
 	},
 }
 
@@ -5215,4 +5271,271 @@ func (r *RuleIPCUnixPeerCongestion) Evaluate(diff *collector.SnapshotDiff) (*Dia
 		}
 	}
 	return nil, false
+}
+
+// RuleMemDirectReclaimStall detects synchronous direct memory reclaim stalls causing severe allocation latency.
+type RuleMemDirectReclaimStall struct{ noSuppression }
+
+func (r *RuleMemDirectReclaimStall) ID() string               { return "CONT_MEM_DIRECT_RECLAIM_STALL" }
+func (r *RuleMemDirectReclaimStall) Tier() int                { return 2 }
+func (r *RuleMemDirectReclaimStall) IsPIDDependent() bool     { return true }
+func (r *RuleMemDirectReclaimStall) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleMemDirectReclaimStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil {
+		return nil, false
+	}
+
+	if diff.VMStat.AllocStallDirectDelta == 0 || diff.VMStat.PgScanDirectDelta < 100 {
+		return nil, false
+	}
+
+	var hasPSI bool
+	var hasLowMem bool
+	if diff.LatestSnapshot != nil {
+		if diff.LatestSnapshot.PSI.Available {
+			hasPSI = diff.LatestSnapshot.PSI.Memory.Some.Avg10 >= 10.0 || diff.LatestSnapshot.PSI.Memory.Full.Avg10 >= 5.0
+		}
+		mem := &diff.LatestSnapshot.Memory
+		if mem.MemTotal > 0 && mem.MemAvailable < (mem.MemTotal/10) {
+			hasLowMem = true
+		}
+	}
+
+	culprit := findReclaimCulprit(diff.Processes)
+	if !hasPSI && !hasLowMem && culprit == nil {
+		return nil, false
+	}
+
+	evidence := make([]string, 0, 4)
+	evidence = append(evidence, fmt.Sprintf("Direct Reclaim Alloc Stalls: %d events in sampling window", diff.VMStat.AllocStallDirectDelta))
+	evidence = append(evidence, fmt.Sprintf("Pages Scanned Directly: %d pages", diff.VMStat.PgScanDirectDelta))
+	if hasPSI && diff.LatestSnapshot != nil {
+		evidence = append(evidence, fmt.Sprintf("Memory PSI: some avg10=%.2f%%, full avg10=%.2f%%", diff.LatestSnapshot.PSI.Memory.Some.Avg10, diff.LatestSnapshot.PSI.Memory.Full.Avg10))
+	}
+	if hasLowMem && diff.LatestSnapshot != nil {
+		mem := &diff.LatestSnapshot.Memory
+		evidence = append(evidence, fmt.Sprintf("Available Memory: %.1f MB (%.1f%% of Total)", float64(mem.MemAvailable)/1024, float64(mem.MemAvailable)*100.0/float64(mem.MemTotal)))
+	}
+
+	diag := &Diagnosis{
+		RuleID:      r.ID(),
+		Tier:        2,
+		Severity:    SeverityHigh,
+		Confidence:  0.95,
+		Title:       "Synchronous Direct Memory Reclaim Stalls",
+		Explanation: "Applications are stalling mid-syscall in direct memory reclaim scanning page LRU lists synchronously because allocation rate exceeded background reclamation capacity.",
+		Evidence:    evidence,
+		Remediation: "Increase vm.min_free_kbytes to trigger background kswapd reclamation earlier, optimize memory usage, or add RAM.",
+	}
+	if culprit != nil {
+		diag.CulpritPID = culprit.PID
+		diag.CulpritName = culprit.Comm
+		diag.CulpritDetails = fmt.Sprintf("Trapped in direct reclaim wait channel '%s' (RSS: %.1f MB)", culprit.Wchan, float64(culprit.RSSBytes)/(1024*1024))
+	}
+	return diag, true
+}
+
+func findReclaimCulprit(procs []collector.ProcessDiff) *collector.ProcessDiff {
+	for i := range procs {
+		p := &procs[i]
+		if p.Wchan == "alloc_pages_slowpath" || p.Wchan == "shrink_inactive_list" {
+			return p
+		}
+	}
+	return nil
+}
+
+// RuleRemoteStorageRPCHang detects processes stuck in uninterruptible sleep on dead remote storage RPC calls.
+type RuleRemoteStorageRPCHang struct{ noSuppression }
+
+func (r *RuleRemoteStorageRPCHang) ID() string               { return "CONT_REMOTE_STORAGE_RPC_HANG" }
+func (r *RuleRemoteStorageRPCHang) Tier() int                { return 2 }
+func (r *RuleRemoteStorageRPCHang) IsPIDDependent() bool     { return true }
+func (r *RuleRemoteStorageRPCHang) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleRemoteStorageRPCHang) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil {
+		return nil, false
+	}
+
+	var culprit *collector.ProcessDiff
+	for i := range diff.Processes {
+		p := &diff.Processes[i]
+		if p.State == 'D' && isRemoteStorageWchan(p.Wchan) && p.CPUPercent < 0.1 && p.CPUTimeDelta == 0 {
+			culprit = p
+			break
+		}
+	}
+
+	if culprit == nil {
+		return nil, false
+	}
+
+	evidence := []string{
+		fmt.Sprintf("Process %s (PID %d) is in uninterruptible sleep (State D)", culprit.Comm, culprit.PID),
+		fmt.Sprintf("Kernel Wait Channel: '%s' (remote storage RPC wait)", culprit.Wchan),
+		fmt.Sprintf("Process CPU Activity: %.2f%% (CPUTimeDelta=0 jiffies)", culprit.CPUPercent),
+	}
+
+	return &Diagnosis{
+		RuleID:         r.ID(),
+		Tier:           2,
+		Severity:       SeverityHigh,
+		Confidence:     0.98,
+		Title:          fmt.Sprintf("Unresponsive Remote Storage RPC Hang (%s)", culprit.Comm),
+		Explanation:    fmt.Sprintf("Process %s (PID %d) is trapped in uninterruptible sleep awaiting an unresponsive remote NFS/CIFS storage RPC handshake. The process cannot be terminated by SIGKILL (kill -9) until the kernel VFS RPC call returns or times out.", culprit.Comm, culprit.PID),
+		Evidence:       evidence,
+		CulpritPID:     culprit.PID,
+		CulpritName:    culprit.Comm,
+		CulpritDetails: fmt.Sprintf("Blocked on remote storage RPC wait channel '%s'", culprit.Wchan),
+		Remediation:    "Check remote NFS/CIFS server network reachability, verify storage firewall rules, or perform lazy unmount (umount -l).",
+	}, true
+}
+
+func isRemoteStorageWchan(wchan string) bool {
+	switch wchan {
+	case "nfs_wait_bit_killable",
+		"rpc_wait_bit_killable",
+		"nfs4_wait_clnt_recover",
+		"cifs_reconnect_tcon",
+		"cifs_wait_for_response",
+		"xprt_wait_for_buffer_space":
+		return true
+	default:
+		return false
+	}
+}
+
+// RuleCPUKernelSpinlockBurn detects processes burning excessive CPU time in kernel routines and spinlocks.
+type RuleCPUKernelSpinlockBurn struct{ noSuppression }
+
+func (r *RuleCPUKernelSpinlockBurn) ID() string               { return "CONT_CPU_KERNEL_SPINLOCK_BURN" }
+func (r *RuleCPUKernelSpinlockBurn) Tier() int                { return 2 }
+func (r *RuleCPUKernelSpinlockBurn) IsPIDDependent() bool     { return true }
+func (r *RuleCPUKernelSpinlockBurn) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleCPUKernelSpinlockBurn) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil {
+		return nil, false
+	}
+
+	var culprit *collector.ProcessDiff
+	var systemRatio float64
+
+	for i := range diff.Processes {
+		p := &diff.Processes[i]
+		if p.CPUPercent < 75.0 || p.CPUTimeDelta == 0 {
+			continue
+		}
+
+		ratio := float64(p.STimeDelta) / float64(p.CPUTimeDelta)
+		if ratio >= 0.80 {
+			if p.NonvoluntaryCtxtSwitchesDelta >= 5000 || diff.TotalCPUUtil.SystemPercent >= 40.0 {
+				culprit = p
+				systemRatio = ratio
+				break
+			}
+		}
+	}
+
+	if culprit == nil {
+		return nil, false
+	}
+
+	evidence := []string{
+		fmt.Sprintf("Process %s (PID %d) CPU: %.1f%%", culprit.Comm, culprit.PID, culprit.CPUPercent),
+		fmt.Sprintf("Kernel System Time Ratio: %.1f%% (%d stime vs %d utime jiffies)", systemRatio*100.0, culprit.STimeDelta, culprit.UTimeDelta),
+		fmt.Sprintf("Involuntary Context Switches: %d", culprit.NonvoluntaryCtxtSwitchesDelta),
+		fmt.Sprintf("Host System CPU: %.1f%%", diff.TotalCPUUtil.SystemPercent),
+	}
+
+	return &Diagnosis{
+		RuleID:         r.ID(),
+		Tier:           2,
+		Severity:       SeverityHigh,
+		Confidence:     0.94,
+		Title:          fmt.Sprintf("Kernel System Time Spinlock Burn (%s)", culprit.Comm),
+		Explanation:    fmt.Sprintf("Process %s (PID %d) is consuming %.1f%% CPU, but over %.1f%% of that CPU is burned executing kernel routines (stime). This indicates kernel spinlock contention, pthread adaptive mutex spinning, or a tight non-blocking syscall storm.", culprit.Comm, culprit.PID, culprit.CPUPercent, systemRatio*100.0),
+		Evidence:       evidence,
+		CulpritPID:     culprit.PID,
+		CulpritName:    culprit.Comm,
+		CulpritDetails: fmt.Sprintf("%.1f%% of execution time spent in kernel stime (%d jiffies)", systemRatio*100.0, culprit.STimeDelta),
+		Remediation:    "Profile process kernel call stacks using 'perf top -p <PID>' to identify contentious spinlocks or failing system call loops.",
+	}, true
+}
+
+// RuleCgroupCFSBurstThrottle detects burst quota exhaustion where multi-threaded tasks exhaust quota early in a period.
+type RuleCgroupCFSBurstThrottle struct{ noSuppression }
+
+func (r *RuleCgroupCFSBurstThrottle) ID() string               { return "CONT_CGROUP_CFS_BURST_THROTTLE" }
+func (r *RuleCgroupCFSBurstThrottle) Tier() int                { return 2 }
+func (r *RuleCgroupCFSBurstThrottle) IsPIDDependent() bool     { return true }
+func (r *RuleCgroupCFSBurstThrottle) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleCgroupCFSBurstThrottle) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil {
+		return nil, false
+	}
+
+	var topCg *collector.CgroupDiff
+	var throttleRatio float64
+
+	for i := range diff.Cgroups {
+		cg := &diff.Cgroups[i]
+		if cg.NrPeriodsDelta < 10 || cg.NrThrottledDelta == 0 {
+			continue
+		}
+
+		hasPSI := diff.LatestSnapshot != nil && diff.LatestSnapshot.PSI.Available && diff.LatestSnapshot.PSI.CPU.Some.Avg10 >= 15.0
+		ratio := float64(cg.NrThrottledDelta) / float64(cg.NrPeriodsDelta)
+		if ratio >= 0.25 && (cg.ThrottledUsecDelta >= 150000 || hasPSI) {
+			if topCg == nil || cg.ThrottledUsecDelta > topCg.ThrottledUsecDelta {
+				topCg = cg
+				throttleRatio = ratio
+			}
+		}
+	}
+
+	if topCg == nil {
+		return nil, false
+	}
+
+	victim := findCgroupVictim(diff.Processes, topCg.Path)
+	evidence := []string{
+		fmt.Sprintf("Cgroup Path: %s", topCg.Path),
+		fmt.Sprintf("Throttled Periods: %d / %d (%.1f%% of periods throttled)", topCg.NrThrottledDelta, topCg.NrPeriodsDelta, throttleRatio*100.0),
+		fmt.Sprintf("Cumulative Throttled Time: %.1f ms", float64(topCg.ThrottledUsecDelta)/1000.0),
+	}
+	if diff.LatestSnapshot != nil && diff.LatestSnapshot.PSI.Available {
+		evidence = append(evidence, fmt.Sprintf("CPU PSI: some avg10=%.2f%%", diff.LatestSnapshot.PSI.CPU.Some.Avg10))
+	}
+
+	diag := &Diagnosis{
+		RuleID:      r.ID(),
+		Tier:        2,
+		Severity:    SeverityHigh,
+		Confidence:  0.96,
+		Title:       fmt.Sprintf("CFS Quota Burst Throttling (%s)", topCg.Path),
+		Explanation: fmt.Sprintf("Cgroup '%s' is being clamped by CFS CPU quota for %.1f%% of scheduling periods (%.1f ms total freeze). Multi-threaded workloads are bursting and burning their allocation early in each 100ms window, resulting in severe P99 latency spikes despite low average CPU usage.", topCg.Path, throttleRatio*100.0, float64(topCg.ThrottledUsecDelta)/1000.0),
+		Evidence:    evidence,
+		Remediation: "Increase cgroup cpu.max quota limit, enable CFS burst headroom (cpu.max.burst / cpu.cfs_burst_us), or right-size worker thread pool concurrency.",
+	}
+	if victim != nil {
+		diag.CulpritPID = victim.PID
+		diag.CulpritName = victim.Comm
+		diag.CulpritDetails = fmt.Sprintf("Top process in throttled cgroup (CPU: %.1f%%)", victim.CPUPercent)
+	}
+	return diag, true
+}
+
+func findCgroupVictim(procs []collector.ProcessDiff, path string) *collector.ProcessDiff {
+	var victim *collector.ProcessDiff
+	for i := range procs {
+		p := &procs[i]
+		if p.CgroupPath == path && (victim == nil || p.CPUPercent > victim.CPUPercent) {
+			victim = p
+		}
+	}
+	return victim
 }

@@ -498,6 +498,7 @@ type CgroupEntry struct {
 	Path             string
 	ThrottledUsec    uint64
 	NrThrottled      uint64
+	NrPeriods        uint64
 	OOMKills         uint64
 	MemoryHighEvents uint64
 	NrBursts         uint64
@@ -560,6 +561,8 @@ type ProcessDiff struct {
 	OOMScoreAdj                   int
 	Wchan                         string
 	CPUTimeDelta                  uint64 // (utime + stime) delta in jiffies
+	UTimeDelta                    uint64
+	STimeDelta                    uint64
 	CPUPercent                    float64
 	ReadBytesDelta                uint64
 	WriteBytesDelta               uint64
@@ -685,6 +688,7 @@ type CgroupDiff struct {
 	Path                  string
 	ThrottledUsecDelta    uint64
 	NrThrottledDelta      uint64
+	NrPeriodsDelta        uint64
 	OOMKillsDelta         uint64
 	MemoryHighEventsDelta uint64
 	NrBurstsDelta         uint64
@@ -1051,6 +1055,7 @@ func calculateCgroupDiff(aGroups, bGroups []CgroupEntry) []CgroupDiff {
 			Path:                  b.Path,
 			ThrottledUsecDelta:    diffUint64(b.ThrottledUsec, a.ThrottledUsec),
 			NrThrottledDelta:      diffUint64(b.NrThrottled, a.NrThrottled),
+			NrPeriodsDelta:        diffUint64(b.NrPeriods, a.NrPeriods),
 			OOMKillsDelta:         diffUint64(b.OOMKills, a.OOMKills),
 			MemoryHighEventsDelta: diffUint64(b.MemoryHighEvents, a.MemoryHighEvents),
 			NrBurstsDelta:         diffUint64(b.NrBursts, a.NrBursts),
@@ -1075,64 +1080,68 @@ func calculateProcessDiff(aProcs, bProcs []ProcessInfo, duration time.Duration) 
 
 	for i := range bProcs {
 		b := &bProcs[i]
-		var cpuDelta uint64
-		var readBytesDelta, writeBytesDelta uint64
-		var volCtxDelta, nonVolCtxDelta uint64
-
-		if a, found := aMap[b.PID]; found {
-			aTime := a.UTime + a.STime
-			bTime := b.UTime + b.STime
-			cpuDelta = diffUint64(bTime, aTime)
-			readBytesDelta = diffUint64(b.ReadBytes, a.ReadBytes)
-			writeBytesDelta = diffUint64(b.WriteBytes, a.WriteBytes)
-			volCtxDelta = diffUint64(b.VoluntaryCtxtSwitches, a.VoluntaryCtxtSwitches)
-			nonVolCtxDelta = diffUint64(b.NonvoluntaryCtxtSwitches, a.NonvoluntaryCtxtSwitches)
-		}
-
-		var fdRatio float64
-		if b.MaxFDs > 0 {
-			fdRatio = float64(b.OpenFDs) / float64(b.MaxFDs)
-		}
-
-		var sigQRatio float64
-		if b.SigQMax > 0 {
-			sigQRatio = float64(b.SigQQueued) / float64(b.SigQMax)
-		}
-
-		// CPU percentage is approximately jiffies (100 Hz = 100 jiffies/sec/core)
-		// normalized across duration. 1 jiffy per second = 1% of a single core.
-		cpuPercent := (float64(cpuDelta) / durSec)
-
-		result = append(result, ProcessDiff{
-			PID:                           b.PID,
-			Comm:                          b.Comm,
-			State:                         b.State,
-			PPID:                          b.PPID,
-			NumThreads:                    b.NumThreads,
-			RSSBytes:                      b.RSSBytes,
-			OOMScore:                      b.OOMScore,
-			OOMScoreAdj:                   b.OOMScoreAdj,
-			Wchan:                         b.Wchan,
-			CPUTimeDelta:                  cpuDelta,
-			CPUPercent:                    cpuPercent,
-			ReadBytesDelta:                readBytesDelta,
-			WriteBytesDelta:               writeBytesDelta,
-			OpenFDs:                       b.OpenFDs,
-			MaxFDs:                        b.MaxFDs,
-			FDRatio:                       fdRatio,
-			CgroupPath:                    b.CgroupPath,
-			CpusAllowed:                   b.CpusAllowed,
-			TracerPID:                     b.TracerPID,
-			Policy:                        b.Policy,
-			SigQQueued:                    b.SigQQueued,
-			SigQMax:                       b.SigQMax,
-			SigQRatio:                     sigQRatio,
-			VoluntaryCtxtSwitchesDelta:    volCtxDelta,
-			NonvoluntaryCtxtSwitchesDelta: nonVolCtxDelta,
-			SmapsRollup:                   b.SmapsRollup,
-		})
+		result = append(result, buildProcessDiff(b, aMap[b.PID], durSec))
 	}
 	return result
+}
+
+func buildProcessDiff(b, a *ProcessInfo, durSec float64) ProcessDiff {
+	var cpuDelta, uTimeDelta, sTimeDelta uint64
+	var readBytesDelta, writeBytesDelta uint64
+	var volCtxDelta, nonVolCtxDelta uint64
+
+	if a != nil {
+		aTime := a.UTime + a.STime
+		bTime := b.UTime + b.STime
+		cpuDelta = diffUint64(bTime, aTime)
+		uTimeDelta = diffUint64(b.UTime, a.UTime)
+		sTimeDelta = diffUint64(b.STime, a.STime)
+		readBytesDelta = diffUint64(b.ReadBytes, a.ReadBytes)
+		writeBytesDelta = diffUint64(b.WriteBytes, a.WriteBytes)
+		volCtxDelta = diffUint64(b.VoluntaryCtxtSwitches, a.VoluntaryCtxtSwitches)
+		nonVolCtxDelta = diffUint64(b.NonvoluntaryCtxtSwitches, a.NonvoluntaryCtxtSwitches)
+	}
+
+	var fdRatio float64
+	if b.MaxFDs > 0 {
+		fdRatio = float64(b.OpenFDs) / float64(b.MaxFDs)
+	}
+
+	var sigQRatio float64
+	if b.SigQMax > 0 {
+		sigQRatio = float64(b.SigQQueued) / float64(b.SigQMax)
+	}
+
+	return ProcessDiff{
+		PID:                           b.PID,
+		Comm:                          b.Comm,
+		State:                         b.State,
+		PPID:                          b.PPID,
+		NumThreads:                    b.NumThreads,
+		RSSBytes:                      b.RSSBytes,
+		OOMScore:                      b.OOMScore,
+		OOMScoreAdj:                   b.OOMScoreAdj,
+		Wchan:                         b.Wchan,
+		CPUTimeDelta:                  cpuDelta,
+		UTimeDelta:                    uTimeDelta,
+		STimeDelta:                    sTimeDelta,
+		CPUPercent:                    float64(cpuDelta) / durSec,
+		ReadBytesDelta:                readBytesDelta,
+		WriteBytesDelta:               writeBytesDelta,
+		OpenFDs:                       b.OpenFDs,
+		MaxFDs:                        b.MaxFDs,
+		FDRatio:                       fdRatio,
+		CgroupPath:                    b.CgroupPath,
+		CpusAllowed:                   b.CpusAllowed,
+		TracerPID:                     b.TracerPID,
+		Policy:                        b.Policy,
+		SigQQueued:                    b.SigQQueued,
+		SigQMax:                       b.SigQMax,
+		SigQRatio:                     sigQRatio,
+		VoluntaryCtxtSwitchesDelta:    volCtxDelta,
+		NonvoluntaryCtxtSwitchesDelta: nonVolCtxDelta,
+		SmapsRollup:                   b.SmapsRollup,
+	}
 }
 
 func diffUint64(newVal, oldVal uint64) uint64 {

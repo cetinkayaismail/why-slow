@@ -146,6 +146,9 @@ func parseCgroupCPUStat(path string, entry *CgroupEntry) bool {
 		}
 
 		switch fields[0] {
+		case "nr_periods":
+			entry.NrPeriods = val
+			found = true
 		case "throttled_usec":
 			entry.ThrottledUsec = val
 			found = true

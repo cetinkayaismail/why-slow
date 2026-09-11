@@ -3115,3 +3115,192 @@ func TestRuleIPCUnixPeerCongestion(t *testing.T) {
 		t.Fatalf("expected RuleIPCUnixPeerCongestion not to trigger on poll_schedule_timeout wchan")
 	}
 }
+
+func TestRuleMemDirectReclaimStall(t *testing.T) {
+	t.Parallel()
+	rule := &RuleMemDirectReclaimStall{}
+
+	if rule.ID() != "CONT_MEM_DIRECT_RECLAIM_STALL" || rule.Tier() != 2 || !rule.IsPIDDependent() {
+		t.Fatalf("unexpected metadata: %s %d %v", rule.ID(), rule.Tier(), rule.IsPIDDependent())
+	}
+
+	diffPos := &collector.SnapshotDiff{
+		VMStat: collector.VMStatDiff{
+			AllocStallDirectDelta: 150,
+			PgScanDirectDelta:     2500,
+		},
+		Processes: []collector.ProcessDiff{
+			{
+				PID:      4001,
+				Comm:     "allocator",
+				Wchan:    "alloc_pages_slowpath",
+				RSSBytes: 256 * 1024 * 1024,
+			},
+		},
+	}
+
+	diag, ok := rule.Evaluate(diffPos)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleMemDirectReclaimStall to trigger on slowpath culprit")
+	}
+	if diag.CulpritPID != 4001 || diag.Confidence != 0.95 {
+		t.Errorf("unexpected culprit or confidence: %d / %f", diag.CulpritPID, diag.Confidence)
+	}
+
+	// Negative: zero allocstall
+	diffNeg := &collector.SnapshotDiff{
+		VMStat: collector.VMStatDiff{
+			AllocStallDirectDelta: 0,
+			PgScanDirectDelta:     5000,
+		},
+	}
+	if _, ok := rule.Evaluate(diffNeg); ok {
+		t.Fatalf("expected RuleMemDirectReclaimStall not to trigger on zero allocstall")
+	}
+}
+
+func TestRuleRemoteStorageRPCHang(t *testing.T) {
+	t.Parallel()
+	rule := &RuleRemoteStorageRPCHang{}
+
+	if rule.ID() != "CONT_REMOTE_STORAGE_RPC_HANG" || rule.Tier() != 2 || !rule.IsPIDDependent() {
+		t.Fatalf("unexpected metadata: %s %d %v", rule.ID(), rule.Tier(), rule.IsPIDDependent())
+	}
+
+	diffPos := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:          5001,
+				Comm:         "nfs_worker",
+				State:        'D',
+				Wchan:        "nfs_wait_bit_killable",
+				CPUPercent:   0.0,
+				CPUTimeDelta: 0,
+			},
+		},
+	}
+
+	diag, ok := rule.Evaluate(diffPos)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleRemoteStorageRPCHang to trigger on nfs_wait_bit_killable")
+	}
+	if diag.CulpritPID != 5001 || diag.Confidence != 0.98 {
+		t.Errorf("unexpected culprit or confidence: %d / %f", diag.CulpritPID, diag.Confidence)
+	}
+
+	// Negative: local disk D state
+	diffNeg := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:          5002,
+				Comm:         "disk_worker",
+				State:        'D',
+				Wchan:        "io_schedule",
+				CPUPercent:   0.0,
+				CPUTimeDelta: 0,
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffNeg); ok {
+		t.Fatalf("expected RuleRemoteStorageRPCHang not to trigger on local io_schedule")
+	}
+}
+
+func TestRuleCPUKernelSpinlockBurn(t *testing.T) {
+	t.Parallel()
+	rule := &RuleCPUKernelSpinlockBurn{}
+
+	if rule.ID() != "CONT_CPU_KERNEL_SPINLOCK_BURN" || rule.Tier() != 2 || !rule.IsPIDDependent() {
+		t.Fatalf("unexpected metadata: %s %d %v", rule.ID(), rule.Tier(), rule.IsPIDDependent())
+	}
+
+	diffPos := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:                           6001,
+				Comm:                          "spinlock_app",
+				CPUPercent:                    96.0,
+				CPUTimeDelta:                  100,
+				STimeDelta:                    88,
+				UTimeDelta:                    12,
+				NonvoluntaryCtxtSwitchesDelta: 6500,
+			},
+		},
+	}
+
+	diag, ok := rule.Evaluate(diffPos)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleCPUKernelSpinlockBurn to trigger on 88%% system time")
+	}
+	if diag.CulpritPID != 6001 || diag.Confidence != 0.94 {
+		t.Errorf("unexpected culprit or confidence: %d / %f", diag.CulpritPID, diag.Confidence)
+	}
+
+	// Negative: user-space compute
+	diffNeg := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:          6002,
+				Comm:         "compute_app",
+				CPUPercent:   96.0,
+				CPUTimeDelta: 100,
+				STimeDelta:   10,
+				UTimeDelta:   90,
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffNeg); ok {
+		t.Fatalf("expected RuleCPUKernelSpinlockBurn not to trigger on user compute")
+	}
+}
+
+func TestRuleCgroupCFSBurstThrottle(t *testing.T) {
+	t.Parallel()
+	rule := &RuleCgroupCFSBurstThrottle{}
+
+	if rule.ID() != "CONT_CGROUP_CFS_BURST_THROTTLE" || rule.Tier() != 2 || !rule.IsPIDDependent() {
+		t.Fatalf("unexpected metadata: %s %d %v", rule.ID(), rule.Tier(), rule.IsPIDDependent())
+	}
+
+	diffPos := &collector.SnapshotDiff{
+		Cgroups: []collector.CgroupDiff{
+			{
+				Path:               "/docker/web",
+				NrPeriodsDelta:     100,
+				NrThrottledDelta:   35,
+				ThrottledUsecDelta: 250000,
+			},
+		},
+		Processes: []collector.ProcessDiff{
+			{
+				PID:        7001,
+				Comm:       "web_srv",
+				CgroupPath: "/docker/web",
+				CPUPercent: 18.0,
+			},
+		},
+	}
+
+	diag, ok := rule.Evaluate(diffPos)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleCgroupCFSBurstThrottle to trigger on 35%% throttled periods")
+	}
+	if diag.CulpritPID != 7001 || diag.Confidence != 0.96 {
+		t.Errorf("unexpected culprit or confidence: %d / %f", diag.CulpritPID, diag.Confidence)
+	}
+
+	// Negative: low period count jitter (< 10 periods)
+	diffNeg := &collector.SnapshotDiff{
+		Cgroups: []collector.CgroupDiff{
+			{
+				Path:               "/docker/web",
+				NrPeriodsDelta:     5,
+				NrThrottledDelta:   2,
+				ThrottledUsecDelta: 250000,
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffNeg); ok {
+		t.Fatalf("expected RuleCgroupCFSBurstThrottle not to trigger on < 10 periods")
+	}
+}

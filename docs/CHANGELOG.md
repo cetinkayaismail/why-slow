@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.28.0] - 2026-09-11
+
+### Added
+- **Deceptive Kernel Bottleneck Disambiguation Rules**:
+  - `CONT_MEM_DIRECT_RECLAIM_STALL` (Tier 2, Confidence 0.95): Unmasks memory latency stalls where allocations are blocked on synchronous kernel page reclaim (`allocstall_direct > 0 && pgscan_direct >= 100`) corroborated by memory pressure stall information (PSI) or processes stuck in `alloc_pages_slowpath` / `shrink_inactive_list`.
+  - `CONT_REMOTE_STORAGE_RPC_HANG` (Tier 2, Confidence 0.98): Detects uninterruptible `D` state processes waiting on dead or non-responsive remote NFS/CIFS RPC servers (`nfs_wait_bit_killable`, `cifs_wait_for_response`, etc.) with zero CPU progression.
+  - `CONT_CPU_KERNEL_SPINLOCK_BURN` (Tier 2, Confidence 0.94): Detects processes consuming $\ge 75\%$ CPU where $\ge 80\%$ of runtime is burned in kernel system time (`stime >> utime`) due to lock contention or kernel spinlocks, corroborated by high context switch frequencies or elevated host system CPU.
+  - `CONT_CGROUP_CFS_BURST_THROTTLE` (Tier 2, Confidence 0.96): Pinpoints multi-threaded container workloads throttled by Completely Fair Scheduler (CFS) quotas in $\ge 25\%$ of elapsed periods, corroborated by $\ge 150\text{ms}$ throttled time or CPU PSI spikes.
+- **Kernel Telemetry Extensions**:
+  - Added `NrPeriods` and `NrPeriodsDelta` to cgroup metrics via `/sys/fs/cgroup/.../cpu.stat`.
+  - Added per-process delta metrics `UTimeDelta` and `STimeDelta` to isolate user-mode vs. kernel-mode CPU consumption without regex or subprocess invocation.
+- **Cross-Tier Disambiguation Matrix**:
+  - Implemented 4 dedicated cross-tier disambiguation tests in `internal/analyzer/disambiguation_test.go` ensuring Tier 1 hard limits (`BASE_OOM_DANGER`, `BASE_DISK_SPACE_FULL`, `BASE_CPU_SATURATION`) properly dominate and demote Tier 2 contention symptoms.
+
 ## [0.27.1] - 2026-09-11
 
 ### Fixed
