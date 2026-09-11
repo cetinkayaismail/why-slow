@@ -183,14 +183,25 @@ func readProcessInfo(procDir string, pid int, buf []byte) (ProcessInfo, bool) {
 	readProcessStatus(pidDir, &info)
 
 	// Count open FDs
-	if fdEntries, err := os.ReadDir(filepath.Join(pidDir, "fd")); err == nil {
-		info.OpenFDs = len(fdEntries)
-	}
+	info.OpenFDs = countOpenFDs(pidDir)
 
 	// Read cgroup path
 	readProcessCgroup(pidDir, &info, buf)
 
 	return info, true
+}
+
+func countOpenFDs(pidDir string) int {
+	d, err := os.Open(filepath.Join(pidDir, "fd"))
+	if err != nil {
+		return 0
+	}
+	defer d.Close()
+	names, err := d.Readdirnames(-1)
+	if err != nil {
+		return 0
+	}
+	return len(names)
 }
 
 // parseProcStatLine parses a /proc/[pid]/stat line.

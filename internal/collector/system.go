@@ -822,65 +822,57 @@ func CollectNetIfaces() ([]NetIfaceStat, error) {
 
 // ParseNetIfaces parses network interfaces in the specified sysfs net directory.
 func ParseNetIfaces(sysNetDir string) ([]NetIfaceStat, error) {
-	entries, err := os.ReadDir(sysNetDir)
+	dir, err := os.Open(sysNetDir)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+
+	names, err := dir.Readdirnames(-1)
 	if err != nil {
 		return nil, err
 	}
 
-	ifaces := make([]NetIfaceStat, 0, len(entries))
-	for _, entry := range entries {
-		name := entry.Name()
+	ifaces := make([]NetIfaceStat, 0, len(names))
+	for _, name := range names {
 		if name == "lo" {
 			continue
 		}
 
-		ifaceDir := sysNetDir + "/" + name
 		stat := NetIfaceStat{Name: name}
-
-		// Read carrier_changes
-		if data, err := os.ReadFile(ifaceDir + "/carrier_changes"); err == nil {
-			stat.CarrierChanges, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-		}
-
-		// Read operstate
-		if data, err := os.ReadFile(ifaceDir + "/operstate"); err == nil {
-			stat.OperState = strings.TrimSpace(string(data))
-		}
-
-		// Read rx_crc_errors
-		if data, err := os.ReadFile(ifaceDir + "/statistics/rx_crc_errors"); err == nil {
-			stat.RxCRCErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-		}
-
-		// Read tx_carrier_errors
-		if data, err := os.ReadFile(ifaceDir + "/statistics/tx_carrier_errors"); err == nil {
-			stat.TxCarrierErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-		}
-
-		// Read rx_errors
-		if data, err := os.ReadFile(ifaceDir + "/statistics/rx_errors"); err == nil {
-			stat.RxErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-		}
-
-		// Read tx_errors
-		if data, err := os.ReadFile(ifaceDir + "/statistics/tx_errors"); err == nil {
-			stat.TxErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-		}
-
-		// Read rx_missed_errors
-		if data, err := os.ReadFile(ifaceDir + "/statistics/rx_missed_errors"); err == nil {
-			stat.RxMissedErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-		}
-
-		// Read rx_fifo_errors
-		if data, err := os.ReadFile(ifaceDir + "/statistics/rx_fifo_errors"); err == nil {
-			stat.RxFIFOErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-		}
-
+		readIfaceStats(sysNetDir+"/"+name, &stat)
 		ifaces = append(ifaces, stat)
 	}
 
 	return ifaces, nil
+}
+
+// readIfaceStats populates interface error statistics and operational state from sysfs.
+func readIfaceStats(ifaceDir string, stat *NetIfaceStat) {
+	if data, err := os.ReadFile(ifaceDir + "/carrier_changes"); err == nil {
+		stat.CarrierChanges, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	if data, err := os.ReadFile(ifaceDir + "/operstate"); err == nil {
+		stat.OperState = strings.TrimSpace(string(data))
+	}
+	if data, err := os.ReadFile(ifaceDir + "/statistics/rx_crc_errors"); err == nil {
+		stat.RxCRCErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	if data, err := os.ReadFile(ifaceDir + "/statistics/tx_carrier_errors"); err == nil {
+		stat.TxCarrierErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	if data, err := os.ReadFile(ifaceDir + "/statistics/rx_errors"); err == nil {
+		stat.RxErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	if data, err := os.ReadFile(ifaceDir + "/statistics/tx_errors"); err == nil {
+		stat.TxErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	if data, err := os.ReadFile(ifaceDir + "/statistics/rx_missed_errors"); err == nil {
+		stat.RxMissedErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
+	if data, err := os.ReadFile(ifaceDir + "/statistics/rx_fifo_errors"); err == nil {
+		stat.RxFIFOErrors, _ = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	}
 }
 
 // ParseTHPDefrag parses the transparent hugepage defrag setting from sysfs.
