@@ -208,4 +208,3 @@ func TestExtractPIDFocus(t *testing.T) {
 		t.Errorf("expected PID 9999, got %d", pfMissing.PID)
 	}
 }
-

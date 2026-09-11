@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.27.0] - 2026-09-10
+
+### Added
+- **Cross-Process Interaction & Contention Telemetry (`/proc/locks`)**:
+  - Added dedicated `/proc/locks` collector in [`internal/collector/locks.go`](file:///home/ismail/Desktop/go_projects/why-slow/internal/collector/locks.go) to track POSIX, FLOCK, and OFD file locks.
+  - Automatically identifies blocked waiter processes (`->`) and correlates them directly with lock holding PIDs.
+- **New Diagnostic Rules for Cross-Process Interference & False Attribution**:
+  - `CONT_SECURITY_FANOTIFY_STALL` (Tier 2): Detects when application threads freeze in kernel wait channels (`fanotify_get_response` / `fanotify_handle_event`) awaiting synchronous on-access file clearance from security scanners (antivirus / EDR engines).
+  - `CONT_FILE_LOCK_GRAPH_BLOCKED` (Tier 2): Pinpoints cross-process lock contention from `/proc/locks`, directly reporting the lock holding PID as the root cause culprit.
+  - `CONT_IPC_UNIX_PEER_CONGESTION` (Tier 2): Identifies processes stalled on Unix domain socket stream writes (`unix_stream_sendmsg`) whose downstream peer consumers are saturated or deadlocked.
+  - `EDGE_SHARED_CACHE_RSS_ILLUSION` (Tier 3): Disambiguates false memory leak alarms when external scanners sweep mapped files, causing inflated `RSS` where `SharedClean` dominates ($\ge 70\%$) while private dirty memory is minimal ($\le 20\%$).
+- **Comprehensive Cross-Tier Disambiguation & Test Matrix**:
+  - Added positive and negative test cases for all newly implemented rules in `tier2_test.go` and `tier3_test.go`.
+  - Added dedicated disambiguation tests in `disambiguation_test.go` verifying that Tier 1 hard limits dominate without rule shadowing.
+
 ## [0.26.0] - 2026-09-09
 
 ### Removed

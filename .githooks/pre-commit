@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# why-slow — Git Pre-Commit Hook
+# Enforces code formatting, go vet, function length <= 60 lines, and security invariants before committing.
+
+set -e
+
+echo "==> [pre-commit] Running local quality and security checks..."
+
+# Ensure go is available in PATH
+if ! command -v go >/dev/null 2>&1; then
+    if [ -x "/usr/local/go/bin/go" ]; then
+        export PATH="/usr/local/go/bin:$PATH"
+    else
+        echo "::error:: Go binary not found in PATH or /usr/local/go/bin. Aborting commit."
+        exit 1
+    fi
+fi
+
+# Get list of staged Go files (excluding deleted files)
+STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+
+if [ -z "$STAGED_GO_FILES" ]; then
+    echo "==> [pre-commit] No staged Go files to check."
+    exit 0
+fi
+
+# 1. Check gofmt formatting
+echo "--> Checking gofmt..."
+UNFORMATTED=$(gofmt -l $STAGED_GO_FILES || true)
+if [ -n "$UNFORMATTED" ]; then
+    echo "::error:: The following staged files are not formatted with gofmt:"
+    echo "$UNFORMATTED"
+    echo "Run 'gofmt -w <file>' to fix formatting before committing."
+    exit 1
+fi
+
+# 2. Run go vet on packages
+echo "--> Running go vet..."
+go vet ./cmd/... ./internal/...
+
+# 3. Check function length limit (<= 60 lines) on modified/added Go functions
+echo "--> Checking modified function lengths (<= 60 lines limit)..."
+if command -v python3 >/dev/null 2>&1; then
+    LENGTH_VIOLATIONS=$(python3 -c '
+import subprocess, re
+
+def get_modified_lines(file_path):
+    try:
+        diff = subprocess.check_output(["git", "diff", "--cached", "-U0", file_path]).decode()
+    except Exception:
+        return set()
+    mod_lines = set()
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+            if m:
+                start = int(m.group(1))
+                count = int(m.group(2)) if m.group(2) else 1
+                for l in range(start, start + count):
+                    mod_lines.add(l)
+    return mod_lines
+
+staged = subprocess.check_output(["git", "diff", "--cached", "--name-only"]).decode().splitlines()
+violations = []
+for path in staged:
+    if not path.endswith(".go") or path.endswith("_test.go"):
+        continue
+    mod_lines = get_modified_lines(path)
+    if not mod_lines:
+        continue
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+    except Exception:
+        continue
+    func_name = None
+    start = 0
+    depth = 0
+    for idx, line in enumerate(lines, 1):
+        m = re.match(r"^func (?:\([^)]+\)\s+)?([A-Za-z0-9_]+)", line)
+        if m and depth == 0:
+            func_name = line.strip()
+            start = idx
+            depth += line.count("{") - line.count("}")
+            if depth == 0:
+                func_name = None
+        elif func_name:
+            depth += line.count("{") - line.count("}")
+            if depth == 0:
+                length = idx - start + 1
+                func_range = set(range(start, idx + 1))
+                if func_range.intersection(mod_lines) and "GetTier" not in func_name and length > 60:
+                    violations.append(f"{path}:{start}-{idx} ({length} lines): {func_name}")
+                func_name = None
+
+if violations:
+    print("\n".join(violations))
+' || true)
+
+    if [ -n "$LENGTH_VIOLATIONS" ]; then
+        echo "::error:: Modified/added functions in production code exceed the strict 60-line limit:"
+        echo "$LENGTH_VIOLATIONS"
+        echo "Please extract private helper functions before committing."
+        exit 1
+    fi
+fi
+
+
+# 4. Security Invariants Audit on staged files
+echo "--> Auditing security invariants on staged files..."
+for file in $STAGED_GO_FILES; do
+    # Skip test files for file write checks (temp fixtures in t.TempDir are permitted in tests)
+    if [[ "$file" != *"_test.go" ]]; then
+        # Check for banned file write/mutation operations
+        WRITES=$(grep -nE 'os\.(Create|WriteFile|OpenFile|Remove|RemoveAll|Rename|Chmod|Chown|Truncate|Mkdir|MkdirAll)' "$file" || true)
+        if [ -n "$WRITES" ]; then
+            echo "::error:: SECURITY VIOLATION: File modification is strictly forbidden in production code ($file):"
+            echo "$WRITES"
+            exit 1
+        fi
+
+        # Check for banned subprocess execution
+        EXECS=$(grep -nE '(exec\.Command|exec\.CommandContext|os\.StartProcess|syscall\.Exec|syscall\.ForkExec)' "$file" || true)
+        if [ -n "$EXECS" ]; then
+            echo "::error:: SECURITY VIOLATION: Subprocess execution is strictly forbidden ($file):"
+            echo "$EXECS"
+            exit 1
+        fi
+
+        # Check for banned outbound network calls
+        NETWORKS=$(grep -nE '(net\.Dial|net\.Listen|http\.Get|http\.Post)' "$file" || true)
+        if [ -n "$NETWORKS" ]; then
+            echo "::error:: SECURITY VIOLATION: Outbound network calls are strictly forbidden ($file):"
+            echo "$NETWORKS"
+            exit 1
+        fi
+
+        # Check for banned sensitive paths
+        PATHS=$(grep -nE '(\/environ|\/maps|\/mem\b|\/etc\/shadow)' "$file" || true)
+        if [ -n "$PATHS" ]; then
+            echo "::error:: SECURITY VIOLATION: Accessing sensitive paths is strictly forbidden ($file):"
+            echo "$PATHS"
+            exit 1
+        fi
+
+    fi
+done
+
+echo "==> [pre-commit] All quality and security checks passed!"
+exit 0

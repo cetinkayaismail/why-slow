@@ -2165,3 +2165,79 @@ func TestRuleOOMImmuneMemoryHog(t *testing.T) {
 		})
 	}
 }
+
+func TestRuleSharedCacheRSSIllusion(t *testing.T) {
+	t.Parallel()
+	rule := &RuleSharedCacheRSSIllusion{}
+
+	if rule.ID() != "EDGE_SHARED_CACHE_RSS_ILLUSION" || rule.Tier() != 3 || !rule.IsPIDDependent() {
+		t.Fatalf("unexpected rule metadata: ID=%s, Tier=%d, IsPIDDependent=%v", rule.ID(), rule.Tier(), rule.IsPIDDependent())
+	}
+
+	diffPositive := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:      4001,
+				Comm:     "heavy_app",
+				RSSBytes: 1024 * 1024 * 1024,
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available:    true,
+					RSS:          1024 * 1024,
+					SharedClean:  850 * 1024,
+					PrivateDirty: 100 * 1024,
+					PSS:          300 * 1024,
+				},
+			},
+		},
+	}
+
+	diag, ok := rule.Evaluate(diffPositive)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleSharedCacheRSSIllusion to trigger on shared clean dominated RSS")
+	}
+	if diag.CulpritPID != 4001 || diag.CulpritName != "heavy_app" {
+		t.Errorf("expected Culprit 4001 heavy_app, got %d %s", diag.CulpritPID, diag.CulpritName)
+	}
+	if diag.Confidence != 0.92 || diag.Severity != SeverityMedium {
+		t.Errorf("unexpected confidence/severity: %f / %s", diag.Confidence, diag.Severity)
+	}
+
+	diffPrivateLeak := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:      4002,
+				Comm:     "leaky_app",
+				RSSBytes: 1024 * 1024 * 1024,
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available:    true,
+					RSS:          1024 * 1024,
+					SharedClean:  50 * 1024,
+					PrivateDirty: 900 * 1024,
+					PSS:          950 * 1024,
+				},
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffPrivateLeak); ok {
+		t.Fatalf("expected RuleSharedCacheRSSIllusion NOT to trigger on private memory leak")
+	}
+
+	diffSmallRSS := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:      4003,
+				Comm:     "small_app",
+				RSSBytes: 100 * 1024 * 1024,
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available:   true,
+					RSS:         100 * 1024,
+					SharedClean: 90 * 1024,
+					PSS:         20 * 1024,
+				},
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffSmallRSS); ok {
+		t.Fatalf("expected RuleSharedCacheRSSIllusion NOT to trigger on RSS < 500MB")
+	}
+}

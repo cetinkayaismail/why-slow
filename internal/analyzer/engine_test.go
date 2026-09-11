@@ -424,4 +424,3 @@ func TestEngineConfidenceCalibration(t *testing.T) {
 		t.Errorf("expected original uncalibrated confidence 0.95, got %f", reportNoPSI.PrimaryBlocker.Confidence)
 	}
 }
-

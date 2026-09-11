@@ -304,4 +304,3 @@ func TestRenderTerminalPIDFocus(t *testing.T) {
 		t.Errorf("missing related rule ID in output:\n%s", out)
 	}
 }
-

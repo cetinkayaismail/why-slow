@@ -86,6 +86,7 @@ func GetTier3Rules() []Rule {
 		&RuleProcZombieParentDeadlock{},
 		&RuleIOSchedulerMismatch{},
 		&RuleOOMImmuneMemoryHog{},
+		&RuleSharedCacheRSSIllusion{},
 	}
 }
 
@@ -819,6 +820,18 @@ var tier3Explanations = map[string]RuleExplanation{
 			"/proc/meminfo",
 		},
 		Remediation: "Reset oom_score_adj or investigate memory leak: echo 0 > /proc/<pid>/oom_score_adj.",
+	},
+	"EDGE_SHARED_CACHE_RSS_ILLUSION": {
+		Description: "Process appears to consume massive RAM (elevated RSS), but memory is predominantly shared clean page cache from scanned files or shared libraries rather than private memory.",
+		Thresholds: []string{
+			"RSS ≥ 500 MB with smaps_rollup Available.",
+			"SharedClean ≥ 70% of RSS and PSS ≤ 50% of RSS.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/status",
+			"/proc/[pid]/smaps_rollup",
+		},
+		Remediation: "Do not terminate process for memory exhaustion. Apparent usage is shared file cache. If system RAM is tight, reclaim cache with 'sync; echo 3 > /proc/sys/vm/drop_caches'.",
 	},
 }
 
@@ -3742,4 +3755,58 @@ func (r *RuleOOMImmuneMemoryHog) Evaluate(diff *collector.SnapshotDiff) (*Diagno
 	}
 
 	return diag, true
+}
+
+// RuleSharedCacheRSSIllusion detects processes with high RSS composed primarily of shared clean page cache (e.g. from file scanners).
+type RuleSharedCacheRSSIllusion struct{ noSuppression }
+
+func (r *RuleSharedCacheRSSIllusion) ID() string               { return "EDGE_SHARED_CACHE_RSS_ILLUSION" }
+func (r *RuleSharedCacheRSSIllusion) Tier() int                { return 3 }
+func (r *RuleSharedCacheRSSIllusion) IsPIDDependent() bool     { return true }
+func (r *RuleSharedCacheRSSIllusion) Explain() RuleExplanation { return tier3Explanations[r.ID()] }
+
+func (r *RuleSharedCacheRSSIllusion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil {
+		return nil, false
+	}
+
+	for i := range diff.Processes {
+		p := &diff.Processes[i]
+		if p.RSSBytes < 500*1024*1024 || !p.SmapsRollup.Available {
+			continue
+		}
+
+		rssKB := p.RSSBytes / 1024
+		if rssKB == 0 {
+			continue
+		}
+
+		sharedClean := p.SmapsRollup.SharedClean
+		privateDirty := p.SmapsRollup.PrivateDirty
+		pss := p.SmapsRollup.PSS
+
+		sharedPct := float64(sharedClean) / float64(rssKB) * 100.0
+		pssPct := float64(pss) / float64(rssKB) * 100.0
+
+		if sharedPct >= 70.0 && pssPct <= 50.0 {
+			return &Diagnosis{
+				RuleID:      r.ID(),
+				Tier:        3,
+				Severity:    SeverityMedium,
+				Confidence:  0.92,
+				Title:       "Shared File Cache Memory Attribution Illusion (Not a Leak)",
+				Explanation: fmt.Sprintf("Process '%s' (PID %d) reports large RSS (%d MB), but %.1f%% is shared clean page cache (scanned files or libraries). Private memory is only %d MB; this is NOT a private memory leak.", p.Comm, p.PID, rssKB/1024, sharedPct, privateDirty/1024),
+				Evidence: []string{
+					fmt.Sprintf("Process PID %d [%s]: RSS=%d MB, SharedClean=%d MB (%.1f%% of RSS)", p.PID, p.Comm, rssKB/1024, sharedClean/1024, sharedPct),
+					fmt.Sprintf("PrivateDirty=%d MB, PSS=%d MB (%.1f%% of RSS)", privateDirty/1024, pss/1024, pssPct),
+				},
+				CulpritPID:     p.PID,
+				CulpritName:    p.Comm,
+				CulpritDetails: fmt.Sprintf("Shared clean file cache dominates RSS (%.1f%%)", sharedPct),
+				Remediation:    "Do not terminate process for memory exhaustion. Apparent usage is shared file cache. If system RAM is tight, reclaim cache with 'sync; echo 3 > /proc/sys/vm/drop_caches'.",
+			}, true
+		}
+	}
+
+	return nil, false
 }

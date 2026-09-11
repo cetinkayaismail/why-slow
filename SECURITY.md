@@ -38,6 +38,19 @@ We strongly advise all operators and contributors to keep their installations on
 
 ---
 
+## Automated CI/CD Anti-Backdoor Gates
+
+Every Pull Request submitted to `why-slow` must pass automated, deterministic security gate checks in GitHub Actions before any code can be merged:
+
+1. **Supply-Chain Gate**: Asserts that `go.mod` contains strictly **zero third-party dependencies**.
+2. **Anti-Backdoor Gate**: Scans all production code to assert **zero `exec.Command` or `os.StartProcess`** invocations.
+3. **Read-Only Gate**: Asserts **zero `os.Create`, `os.WriteFile`, `os.Remove`**, or filesystem write operations in production code.
+4. **Anti-Exfiltration Gate**: Asserts **zero `net.Dial` or HTTP clients** preventing any remote telemetry transmission.
+5. **Sensitive Path Gate**: Asserts **zero access to `/proc/[pid]/environ`, `/proc/[pid]/maps`**, or credential files.
+6. **Go Vulnerability Database**: Scans all code using the official Go vulnerability database (`govulncheck`).
+
+---
+
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability or a potential invariant bypass in `why-slow`:

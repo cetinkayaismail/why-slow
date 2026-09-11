@@ -106,6 +106,9 @@ func GetTier2Rules() []Rule {
 		&RuleRunawayCPUProcess{},
 		&RuleProcessSwapPinned{},
 		&RuleDentryCacheExplosion{},
+		&RuleSecurityFanotifyStall{},
+		&RuleFileLockGraphBlocked{},
+		&RuleIPCUnixPeerCongestion{},
 	}
 }
 
@@ -1080,6 +1083,42 @@ var tier2Explanations = map[string]RuleExplanation{
 			"/proc/meminfo",
 		},
 		Remediation: "echo 2 > /proc/sys/vm/drop_caches (requires root) to release dentry/inode caches",
+	},
+	"CONT_SECURITY_FANOTIFY_STALL": {
+		Description: "Process threads are frozen waiting for on-access antivirus or EDR file inspection clearance via fanotify.",
+		Thresholds: []string{
+			"wchan contains 'fanotify_get_response' or 'fanotify_handle_event'.",
+			"Process in 'S' or 'D' state with CPU < 5.0%.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/wchan",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "Configure on-access security scanner (e.g. clamonacc, falcon-sensor, mdatp) to exclude process data paths or switch to async scanning.",
+	},
+	"CONT_FILE_LOCK_GRAPH_BLOCKED": {
+		Description: "Process is blocked waiting for an exclusive POSIX or FLOCK file lock held by another process.",
+		Thresholds: []string{
+			"/proc/locks contains blocked request ('->') waiting on holder PID.",
+			"Victim process in 'S' or 'D' state.",
+		},
+		KernelSources: []string{
+			"/proc/locks",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "Inspect or release file lock on inode or terminate holder PID.",
+	},
+	"CONT_IPC_UNIX_PEER_CONGESTION": {
+		Description: "Process is stalled waiting to write to a Unix domain socket whose receiver buffer is saturated.",
+		Thresholds: []string{
+			"wchan is 'unix_stream_sendmsg', 'unix_wait_for_peer', or 'sk_stream_wait_memory'.",
+			"Process in 'S' or 'D' state with CPU < 1.0%.",
+		},
+		KernelSources: []string{
+			"/proc/[pid]/wchan",
+			"/proc/[pid]/stat",
+		},
+		Remediation: "Investigate downstream Unix socket consumer daemon (e.g. logger, systemd-journald) or increase socket buffer limit (sysctl -w net.core.wmem_default=262144).",
 	},
 }
 
@@ -4942,9 +4981,9 @@ type RuleProcessSwapPinned struct {
 	noSuppression
 }
 
-func (r *RuleProcessSwapPinned) ID() string             { return "CONT_PROCESS_SWAP_PINNED" }
-func (r *RuleProcessSwapPinned) Tier() int              { return 2 }
-func (r *RuleProcessSwapPinned) IsPIDDependent() bool   { return true }
+func (r *RuleProcessSwapPinned) ID() string               { return "CONT_PROCESS_SWAP_PINNED" }
+func (r *RuleProcessSwapPinned) Tier() int                { return 2 }
+func (r *RuleProcessSwapPinned) IsPIDDependent() bool     { return true }
 func (r *RuleProcessSwapPinned) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
 
 func (r *RuleProcessSwapPinned) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
@@ -5005,9 +5044,9 @@ type RuleDentryCacheExplosion struct {
 	noSuppression
 }
 
-func (r *RuleDentryCacheExplosion) ID() string             { return "CONT_DENTRY_CACHE_EXPLOSION" }
-func (r *RuleDentryCacheExplosion) Tier() int              { return 2 }
-func (r *RuleDentryCacheExplosion) IsPIDDependent() bool   { return false }
+func (r *RuleDentryCacheExplosion) ID() string               { return "CONT_DENTRY_CACHE_EXPLOSION" }
+func (r *RuleDentryCacheExplosion) Tier() int                { return 2 }
+func (r *RuleDentryCacheExplosion) IsPIDDependent() bool     { return false }
 func (r *RuleDentryCacheExplosion) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
 
 func (r *RuleDentryCacheExplosion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
@@ -5040,4 +5079,143 @@ func (r *RuleDentryCacheExplosion) Evaluate(diff *collector.SnapshotDiff) (*Diag
 		},
 		Remediation: "echo 2 > /proc/sys/vm/drop_caches (requires root) to release dentry/inode caches",
 	}, true
+}
+
+// RuleSecurityFanotifyStall detects processes frozen awaiting synchronous file scan clearance from antivirus/EDR daemons.
+type RuleSecurityFanotifyStall struct{ noSuppression }
+
+func (r *RuleSecurityFanotifyStall) ID() string               { return "CONT_SECURITY_FANOTIFY_STALL" }
+func (r *RuleSecurityFanotifyStall) Tier() int                { return 2 }
+func (r *RuleSecurityFanotifyStall) IsPIDDependent() bool     { return true }
+func (r *RuleSecurityFanotifyStall) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleSecurityFanotifyStall) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil {
+		return nil, false
+	}
+
+	for i := range diff.Processes {
+		p := &diff.Processes[i]
+		if (p.Wchan == "fanotify_get_response" || p.Wchan == "fanotify_handle_event" || strings.Contains(p.Wchan, "fanotify")) &&
+			(p.State == 'S' || p.State == 'D') && p.CPUPercent < 5.0 {
+			return &Diagnosis{
+				RuleID:      r.ID(),
+				Tier:        2,
+				Severity:    SeverityHigh,
+				Confidence:  0.95,
+				Title:       "Antivirus / EDR On-Access Scan Interception (fanotify)",
+				Explanation: fmt.Sprintf("Process '%s' (PID %d) is frozen waiting for synchronous file inspection approval from a security scanner via fanotify (%s).", p.Comm, p.PID, p.Wchan),
+				Evidence: []string{
+					fmt.Sprintf("Process PID %d [%s] stalled in kernel wait channel: '%s'", p.PID, p.Comm, p.Wchan),
+					fmt.Sprintf("State: %c, Threads: %d, CPU Utilization: %.2f%%", p.State, p.NumThreads, p.CPUPercent),
+				},
+				CulpritPID:     p.PID,
+				CulpritName:    p.Comm,
+				CulpritDetails: fmt.Sprintf("Synchronous fanotify scan stall in %s", p.Wchan),
+				Remediation:    "Configure on-access security scanner (e.g. clamonacc, falcon-sensor, mdatp) to exclude process data paths or switch to async scanning.",
+			}, true
+		}
+	}
+	return nil, false
+}
+
+// RuleFileLockGraphBlocked detects processes blocked waiting for POSIX or FLOCK file locks held by other processes.
+type RuleFileLockGraphBlocked struct{ noSuppression }
+
+func (r *RuleFileLockGraphBlocked) ID() string               { return "CONT_FILE_LOCK_GRAPH_BLOCKED" }
+func (r *RuleFileLockGraphBlocked) Tier() int                { return 2 }
+func (r *RuleFileLockGraphBlocked) IsPIDDependent() bool     { return true }
+func (r *RuleFileLockGraphBlocked) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleFileLockGraphBlocked) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil || !diff.FileLocks.Available || len(diff.FileLocks.BlockedLocks) == 0 {
+		return nil, false
+	}
+
+	for _, block := range diff.FileLocks.BlockedLocks {
+		victimName := "unknown"
+		for i := range diff.Processes {
+			if diff.Processes[i].PID == block.BlockedPID {
+				victimName = diff.Processes[i].Comm
+				break
+			}
+		}
+
+		holderPID := block.HolderPID
+		holderName := "unknown"
+		for i := range diff.Processes {
+			if diff.Processes[i].PID == holderPID {
+				holderName = diff.Processes[i].Comm
+				break
+			}
+		}
+
+		culpritPID := holderPID
+		culpritName := holderName
+		if culpritPID == 0 {
+			culpritPID = block.BlockedPID
+			culpritName = victimName
+		}
+
+		evidence := []string{
+			fmt.Sprintf("Blocked Process: PID %d [%s] waiting for %s lock on inode %s", block.BlockedPID, victimName, block.LockType, block.DeviceInode),
+		}
+		if holderPID > 0 {
+			evidence = append(evidence, fmt.Sprintf("Lock Holder: PID %d [%s] holding exclusive lock", holderPID, holderName))
+		}
+
+		return &Diagnosis{
+			RuleID:         r.ID(),
+			Tier:           2,
+			Severity:       SeverityHigh,
+			Confidence:     0.95,
+			Title:          "Cross-Process File Lock Serialization (/proc/locks)",
+			Explanation:    fmt.Sprintf("Process PID %d [%s] is blocked in the kernel waiting for a %s lock on inode %s held by PID %d [%s].", block.BlockedPID, victimName, block.LockType, block.DeviceInode, holderPID, holderName),
+			Evidence:       evidence,
+			CulpritPID:     culpritPID,
+			CulpritName:    culpritName,
+			CulpritDetails: fmt.Sprintf("Holding %s file lock on inode %s blocking PID %d", block.LockType, block.DeviceInode, block.BlockedPID),
+			Remediation:    fmt.Sprintf("Inspect or release file lock on inode %s or terminate holder PID %d.", block.DeviceInode, holderPID),
+		}, true
+	}
+
+	return nil, false
+}
+
+// RuleIPCUnixPeerCongestion detects processes stalled on Unix domain socket stream writes to saturated peers.
+type RuleIPCUnixPeerCongestion struct{ noSuppression }
+
+func (r *RuleIPCUnixPeerCongestion) ID() string               { return "CONT_IPC_UNIX_PEER_CONGESTION" }
+func (r *RuleIPCUnixPeerCongestion) Tier() int                { return 2 }
+func (r *RuleIPCUnixPeerCongestion) IsPIDDependent() bool     { return true }
+func (r *RuleIPCUnixPeerCongestion) Explain() RuleExplanation { return tier2Explanations[r.ID()] }
+
+func (r *RuleIPCUnixPeerCongestion) Evaluate(diff *collector.SnapshotDiff) (*Diagnosis, bool) {
+	if diff == nil {
+		return nil, false
+	}
+
+	for i := range diff.Processes {
+		p := &diff.Processes[i]
+		if (p.Wchan == "unix_stream_sendmsg" || p.Wchan == "unix_wait_for_peer" || p.Wchan == "sk_stream_wait_memory") &&
+			(p.State == 'S' || p.State == 'D') && p.CPUPercent < 1.0 {
+			return &Diagnosis{
+				RuleID:      r.ID(),
+				Tier:        2,
+				Severity:    SeverityHigh,
+				Confidence:  0.90,
+				Title:       "Unix Domain Socket IPC Peer Backpressure",
+				Explanation: fmt.Sprintf("Process '%s' (PID %d) is stalled attempting to write to a Unix domain socket whose receiver buffer is saturated. The peer daemon is slow or blocked.", p.Comm, p.PID),
+				Evidence: []string{
+					fmt.Sprintf("Process PID %d [%s] blocked in wchan '%s'", p.PID, p.Comm, p.Wchan),
+					fmt.Sprintf("State: %c, Threads: %d, CPU Utilization: %.2f%%", p.State, p.NumThreads, p.CPUPercent),
+				},
+				CulpritPID:     p.PID,
+				CulpritName:    p.Comm,
+				CulpritDetails: fmt.Sprintf("Blocked in IPC wait channel %s", p.Wchan),
+				Remediation:    "Investigate downstream Unix socket consumer daemon (e.g. logger, systemd-journald) or increase socket buffer limit (sysctl -w net.core.wmem_default=262144).",
+			}, true
+		}
+	}
+	return nil, false
 }

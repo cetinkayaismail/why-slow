@@ -534,6 +534,7 @@ type SystemSnapshot struct {
 	LoadAvg      LoadAvgInfo
 	TCPSockets   TCPSocketsInfo
 	VMConfig     VMConfigInfo
+	FileLocks    FileLocksInfo
 }
 
 // CPUUtilization holds computed CPU percentage deltas over the sampling window.
@@ -708,6 +709,7 @@ type SnapshotDiff struct {
 	NetStat               NetStatDiff
 	Cgroups               []CgroupDiff
 	NetIfaces             []NetIfaceDiff
+	FileLocks             FileLocksInfo
 	LatestSnapshot        *SystemSnapshot
 }
 
@@ -774,6 +776,14 @@ func collectParallelIndependent(ctx context.Context, snap *SystemSnapshot) {
 	run(func() func() { res, _ := CollectLoadAvg(); return func() { snap.LoadAvg = res } })
 	run(func() func() { res, _ := CollectTCPSockets(); return func() { snap.TCPSockets = res } })
 	run(func() func() { res, _ := CollectVMConfig(); return func() { snap.VMConfig = res } })
+	run(func() func() {
+		res, _ := CollectFileLocks()
+		return func() {
+			if res != nil {
+				snap.FileLocks = *res
+			}
+		}
+	})
 
 	wg.Wait()
 }
@@ -803,6 +813,7 @@ func DiffSnapshots(a, b *SystemSnapshot) *SnapshotDiff {
 		Cgroups:               calculateCgroupDiff(a.Cgroups.Groups, b.Cgroups.Groups),
 		NetIfaces:             calculateNetIfacesDiff(a.NetIfaces, b.NetIfaces),
 		Processes:             calculateProcessDiff(a.Processes, b.Processes, duration),
+		FileLocks:             b.FileLocks,
 		LatestSnapshot:        b,
 	}
 

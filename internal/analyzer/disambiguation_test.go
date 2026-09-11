@@ -2722,3 +2722,182 @@ func TestDisambiguation_DentryCacheExplosion_vs_BaseOOMDanger(t *testing.T) {
 	}
 }
 
+func TestDisambiguation_SecurityFanotify_vs_BaseCPUSaturation(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		TotalCPUUtil: collector.CPUUtilization{IdlePercent: 0.1, BusyPercent: 99.9},
+		PerCoreCPUUtil: []collector.CPUUtilization{
+			{IdlePercent: 0.1}, {IdlePercent: 0.1},
+		},
+		ProcsRunning: 16,
+		LatestSnapshot: &collector.SystemSnapshot{
+			CPU: collector.CPUStatInfo{
+				PerCore: []collector.CoreCPUStat{{ID: "cpu0"}, {ID: "cpu1"}},
+			},
+			Thermal: collector.ThermalInfo{Available: true, MaxTemp: 50.0},
+			CPUFreq: collector.CPUFreqInfo{Available: true, Cores: []collector.CoreFreq{{CoreID: 0, CurFreq: 3000000, MaxFreq: 3000000}}},
+		},
+		Processes: []collector.ProcessDiff{
+			{PID: 101, Comm: "cpu_burner", CPUPercent: 198.0, CPUTimeDelta: 200},
+			{PID: 102, Comm: "stalled_app", State: 'S', Wchan: "fanotify_get_response", CPUPercent: 0.1, NumThreads: 2},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_CPU_SATURATION" {
+		t.Errorf("expected BASE_CPU_SATURATION to dominate, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundFanotify := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_SECURITY_FANOTIFY_STALL" {
+			foundFanotify = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_SECURITY_FANOTIFY_STALL" {
+			foundFanotify = true
+			break
+		}
+	}
+	if !foundFanotify {
+		t.Errorf("expected CONT_SECURITY_FANOTIFY_STALL in contributing factors or secondary issues")
+	}
+}
+
+func TestDisambiguation_FileLockGraph_vs_BaseDiskHWSaturation(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		Disks: []collector.DiskDeviceDiff{
+			{DeviceName: "nvme0n1", UtilPercent: 99.8, IOsInProgress: 120, AvgReadLatencyMS: 85.0},
+		},
+		FileLocks: collector.FileLocksInfo{
+			Available:  true,
+			TotalLocks: 5,
+			BlockedLocks: []collector.BlockedFileLock{
+				{BlockedPID: 202, HolderPID: 201, LockType: "POSIX", DeviceInode: "08:01:9999"},
+			},
+		},
+		Processes: []collector.ProcessDiff{
+			{PID: 201, Comm: "db_holder", ReadBytesDelta: 500000000},
+			{PID: 202, Comm: "db_waiter", State: 'D', CPUPercent: 0.0},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_DISK_HARDWARE_SATURATION" {
+		t.Errorf("expected BASE_DISK_HARDWARE_SATURATION to dominate, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundLock := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_FILE_LOCK_GRAPH_BLOCKED" {
+			foundLock = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_FILE_LOCK_GRAPH_BLOCKED" {
+			foundLock = true
+			break
+		}
+	}
+	if !foundLock {
+		t.Errorf("expected CONT_FILE_LOCK_GRAPH_BLOCKED in contributing factors or secondary issues")
+	}
+}
+
+func TestDisambiguation_SharedCacheIllusion_vs_BaseOOMDanger(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		LatestSnapshot: &collector.SystemSnapshot{
+			Memory: collector.MemInfo{
+				MemTotal:     16000000,
+				MemAvailable: 200000, // 1.25% < 3% -> triggers BASE_OOM_DANGER
+			},
+		},
+		Processes: []collector.ProcessDiff{
+			{
+				PID:      301,
+				Comm:     "cache_hog",
+				RSSBytes: 2048 * 1024 * 1024,
+				SmapsRollup: collector.SmapsRollupInfo{
+					Available:    true,
+					RSS:          2048 * 1024,
+					SharedClean:  1800 * 1024,
+					PrivateDirty: 100 * 1024,
+					PSS:          600 * 1024,
+				},
+			},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_OOM_DANGER" {
+		t.Errorf("expected BASE_OOM_DANGER to dominate, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundSharedCache := false
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "EDGE_SHARED_CACHE_RSS_ILLUSION" {
+			foundSharedCache = true
+			break
+		}
+	}
+	if !foundSharedCache {
+		t.Errorf("expected EDGE_SHARED_CACHE_RSS_ILLUSION in secondary issues")
+	}
+}
+
+func TestDisambiguation_IPCUnixPeer_vs_BaseCPUSaturation(t *testing.T) {
+	diff := &collector.SnapshotDiff{
+		TotalCPUUtil: collector.CPUUtilization{IdlePercent: 0.1, BusyPercent: 99.9},
+		PerCoreCPUUtil: []collector.CPUUtilization{
+			{IdlePercent: 0.1}, {IdlePercent: 0.1},
+		},
+		ProcsRunning: 16,
+		LatestSnapshot: &collector.SystemSnapshot{
+			CPU: collector.CPUStatInfo{
+				PerCore: []collector.CoreCPUStat{{ID: "cpu0"}, {ID: "cpu1"}},
+			},
+			Thermal: collector.ThermalInfo{Available: true, MaxTemp: 50.0},
+			CPUFreq: collector.CPUFreqInfo{Available: true, Cores: []collector.CoreFreq{{CoreID: 0, CurFreq: 3000000, MaxFreq: 3000000}}},
+		},
+		Processes: []collector.ProcessDiff{
+			{PID: 101, Comm: "cpu_burner", CPUPercent: 198.0, CPUTimeDelta: 200},
+			{PID: 102, Comm: "syslog_client", State: 'S', Wchan: "unix_stream_sendmsg", CPUPercent: 0.0, NumThreads: 2},
+		},
+	}
+
+	report := analyzeSnapshotDiff(diff, true)
+	if report.PrimaryBlocker == nil {
+		t.Fatalf("expected PrimaryBlocker")
+	}
+	if report.PrimaryBlocker.RuleID != "BASE_CPU_SATURATION" {
+		t.Errorf("expected BASE_CPU_SATURATION to dominate, got %s", report.PrimaryBlocker.RuleID)
+	}
+
+	foundIPC := false
+	for _, cf := range report.ContributingFactors {
+		if cf.RuleID == "CONT_IPC_UNIX_PEER_CONGESTION" {
+			foundIPC = true
+			break
+		}
+	}
+	for _, si := range report.SecondaryIssues {
+		if si.RuleID == "CONT_IPC_UNIX_PEER_CONGESTION" {
+			foundIPC = true
+			break
+		}
+	}
+	if !foundIPC {
+		t.Errorf("expected CONT_IPC_UNIX_PEER_CONGESTION in contributing factors or secondary issues")
+	}
+}

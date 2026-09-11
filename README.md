@@ -169,6 +169,7 @@ why-slow --no-color
 | Document | Purpose & Scope |
 |---|---|
 | 🏛️ **[System Architecture](docs/ARCHITECTURE.md)** | Technical specification, pipeline design, STRIDE threat model, and zero-write proof. |
+| 💡 **[Design Principles & 8 Laws](docs/DESIGN_PRINCIPLES.md)** | Core philosophy, the Doctor's Rule, and the 8 Iron Architectural Laws in plain English. |
 | 📋 **[Rules Catalog](docs/RULES_CATALOG.md)** | Complete reference for all 160 diagnostic rules across Tier 1, 2, and 3. |
 | 📖 **[Operations Runbook](docs/OPERATIONS_RUNBOOK.md)** | Bare-metal, systemd sentinel service, Kubernetes DaemonSet manifest, and incident triage SOP. |
 | 📡 **[SIEM & APM Integration](docs/INTEGRATION_GUIDE.md)** | JSON Schema (Draft 2020-12), Splunk, Elastic SIEM, Datadog, and Vector pipeline configs. |

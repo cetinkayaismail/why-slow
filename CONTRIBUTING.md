@@ -12,6 +12,8 @@ Please take a few moments to review this guide to ensure your contributions alig
 
 All contributions must strictly uphold these core architectural principles:
 
+> 💡 **Before writing code, please read our friendly [Design Principles & 8 Iron Laws](docs/DESIGN_PRINCIPLES.md) guide to understand the engineering mental model.**
+
 1. **Zero Dependencies & Zero CGo**: The project is 100% Go standard library (`CGO_ENABLED=0`). No external packages may be introduced to `go.mod`.
 2. **Strict Read-Only Guarantee**: `why-slow` never modifies the host system. It opens `/proc` and `/sys` virtual files strictly with `O_RDONLY`. Zero disk writes, zero `/tmp` files, and zero `exec.Command` invocations.
 3. **Sub-Second Execution & Strict Budget**: Total compute latency must remain $< 50\text{ ms}$, RSS memory footprint $< 15\text{ MB}$, and CPU usage negligible.
@@ -36,13 +38,13 @@ cd why-slow
 # Build the static binary
 make build
 
-# Run unit tests and race detector
-make test
+# Install local Git hooks (enforces formatting, <=60 line limit, and security invariants on commit)
+make setup-hooks
 
-# Run vet and format checks
-make vet
-make fmt
+# Run comprehensive validation (linting, security invariant checks, unit & race tests)
+make check
 ```
+
 
 ---
 

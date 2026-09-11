@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  vet:
+    name: Code Quality & Vet
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [ "1.22", "1.23", "1.24" ]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: false
+
+      - name: Verify Go Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not formatted properly:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run Go Vet
+        run: go vet ./cmd/... ./internal/...
+
+  test:
+    name: Unit & Race Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [ "1.22", "1.23", "1.24" ]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: false
+
+      - name: Run Exhaustive Tests with Race Detector
+        run: |
+          go test -v -race -count=1 ./internal/...
+          go test -v -race -count=1 ./internal_tests/battle_test.go
+
+  build-cross:
+    name: Pure Go Multi-Arch Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Build linux/amd64 (Pure Go)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/why-slow-linux-amd64 ./cmd/why-slow/
+          file bin/why-slow-linux-amd64
+
+      - name: Build linux/arm64 (Pure Go)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/why-slow-linux-arm64 ./cmd/why-slow/
+          file bin/why-slow-linux-arm64
+
+  security-gate:
+    name: Anti-Backdoor & Invariant Security Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Gate 1 - Assert Zero External Dependencies (Supply-Chain Defense)
+        run: |
+          echo "Scanning go.mod for third-party dependencies..."
+          if grep -qE "require\s+\(" go.mod || grep -qE "^\s*require\s+[a-zA-Z0-9]" go.mod; then
+            echo "::error::SECURITY VIOLATION: Third-party dependencies are strictly forbidden in go.mod!"
+            exit 1
+          fi
+          echo "PASS: Zero external dependencies."
+
+      - name: Gate 2 - Assert Zero Shell / Process Invocations (Anti-Backdoor)
+        run: |
+          echo "Scanning production code for forbidden exec.Command or os.StartProcess..."
+          VIOLATIONS=$(find cmd/ internal/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "exec\.Command|os\.StartProcess" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::SECURITY VIOLATION: Spawning external processes via exec.Command is strictly forbidden!"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: Zero process spawn calls."
+
+      - name: Gate 3 - Assert Strict Zero Disk Writes (Read-Only Invariant)
+        run: |
+          echo "Scanning production code for write/delete filesystem operations..."
+          VIOLATIONS=$(find cmd/ internal/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "os\.(Create|WriteFile|Remove|RemoveAll|Rename|Chmod|Chown)" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::SECURITY VIOLATION: File write/delete operations are strictly forbidden in production code!"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: Zero write operations in production code."
+
+      - name: Gate 4 - Assert Zero Outbound Network Sockets (No Telemetry Exfiltration)
+        run: |
+          echo "Scanning production code for outbound network dialers or HTTP clients..."
+          VIOLATIONS=$(find internal/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "net\.(Dial|DialTCP|DialUDP)|http\.(Get|Post|Head|Client)" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::SECURITY VIOLATION: Outbound network calls are strictly forbidden!"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: Zero outbound network sockets."
+
+      - name: Gate 5 - Assert Zero Sensitive File Path Reads
+        run: |
+          echo "Scanning collector for forbidden sensitive file paths..."
+          VIOLATIONS=$(find internal/collector/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "\"/environ\"|\"/maps\"|\"/etc/shadow\"" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::SECURITY VIOLATION: Reading sensitive paths is strictly forbidden!"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: Zero sensitive path access."
+
+      - name: Gate 6 - Official Go Vulnerability Database Scan (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

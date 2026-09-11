@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# why-slow — Git Post-Commit Hook
+# Asynchronously refreshes graphify code AST knowledge graph after successful commit if available.
+
+if command -v graphify >/dev/null 2>&1; then
+    graphify . --code-only > /dev/null 2>&1 &
+elif [ -x "$HOME/.local/bin/graphify" ]; then
+    "$HOME/.local/bin/graphify" . --code-only > /dev/null 2>&1 &
+fi

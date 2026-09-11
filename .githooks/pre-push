@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# why-slow — Git Pre-Push Hook
+# Runs the full unit & race detector test suite before any code is pushed to remote.
+
+set -e
+
+echo "==> [pre-push] Running exhaustive tests under Go race detector..."
+
+if ! command -v go >/dev/null 2>&1; then
+    if [ -x "/usr/local/go/bin/go" ]; then
+        export PATH="/usr/local/go/bin:$PATH"
+    else
+        echo "::error:: Go binary not found in PATH or /usr/local/go/bin. Aborting push."
+        exit 1
+    fi
+fi
+
+go test -race -count=1 ./internal/...
+go test -race -count=1 ./cmd/...
+
+echo "==> [pre-push] All tests and race detector checks passed cleanly! Safe to push."
+exit 0

@@ -2971,3 +2971,147 @@ func TestRuleDentryCacheExplosion(t *testing.T) {
 	}
 }
 
+func TestRuleSecurityFanotifyStall(t *testing.T) {
+	t.Parallel()
+	rule := &RuleSecurityFanotifyStall{}
+
+	if rule.ID() != "CONT_SECURITY_FANOTIFY_STALL" || rule.Tier() != 2 || !rule.IsPIDDependent() {
+		t.Fatalf("unexpected rule metadata: ID=%s, Tier=%d, IsPIDDependent=%v", rule.ID(), rule.Tier(), rule.IsPIDDependent())
+	}
+
+	diffPositive := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:        1001,
+				Comm:       "data_app",
+				State:      'S',
+				Wchan:      "fanotify_get_response",
+				CPUPercent: 0.1,
+				NumThreads: 4,
+			},
+		},
+	}
+
+	diag, ok := rule.Evaluate(diffPositive)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleSecurityFanotifyStall to trigger on fanotify_get_response wchan")
+	}
+	if diag.CulpritPID != 1001 || diag.CulpritName != "data_app" {
+		t.Errorf("expected Culprit 1001 data_app, got %d %s", diag.CulpritPID, diag.CulpritName)
+	}
+	if diag.Confidence != 0.95 || diag.Severity != SeverityHigh {
+		t.Errorf("unexpected confidence/severity: %f / %s", diag.Confidence, diag.Severity)
+	}
+
+	diffNormal := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:        1002,
+				Comm:       "worker",
+				State:      'S',
+				Wchan:      "ep_poll",
+				CPUPercent: 0.1,
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffNormal); ok {
+		t.Fatalf("expected RuleSecurityFanotifyStall not to trigger on normal ep_poll wchan")
+	}
+}
+
+func TestRuleFileLockGraphBlocked(t *testing.T) {
+	t.Parallel()
+	rule := &RuleFileLockGraphBlocked{}
+
+	if rule.ID() != "CONT_FILE_LOCK_GRAPH_BLOCKED" || rule.Tier() != 2 || !rule.IsPIDDependent() {
+		t.Fatalf("unexpected rule metadata: ID=%s, Tier=%d, IsPIDDependent=%v", rule.ID(), rule.Tier(), rule.IsPIDDependent())
+	}
+
+	diffPositive := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{PID: 2001, Comm: "db_writer"},
+			{PID: 2002, Comm: "db_reader"},
+		},
+		FileLocks: collector.FileLocksInfo{
+			Available:  true,
+			TotalLocks: 10,
+			BlockedLocks: []collector.BlockedFileLock{
+				{
+					BlockedPID:  2002,
+					HolderPID:   2001,
+					LockType:    "POSIX",
+					DeviceInode: "08:01:123456",
+				},
+			},
+		},
+	}
+
+	diag, ok := rule.Evaluate(diffPositive)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleFileLockGraphBlocked to trigger on blocked file lock")
+	}
+	if diag.CulpritPID != 2001 || diag.CulpritName != "db_writer" {
+		t.Errorf("expected lock holder PID 2001 db_writer as culprit, got %d %s", diag.CulpritPID, diag.CulpritName)
+	}
+	if diag.Confidence != 0.95 || diag.Severity != SeverityHigh {
+		t.Errorf("unexpected confidence/severity: %f / %s", diag.Confidence, diag.Severity)
+	}
+
+	diffEmpty := &collector.SnapshotDiff{
+		FileLocks: collector.FileLocksInfo{
+			Available:    true,
+			BlockedLocks: []collector.BlockedFileLock{},
+		},
+	}
+	if _, ok := rule.Evaluate(diffEmpty); ok {
+		t.Fatalf("expected RuleFileLockGraphBlocked not to trigger when no locks are blocked")
+	}
+}
+
+func TestRuleIPCUnixPeerCongestion(t *testing.T) {
+	t.Parallel()
+	rule := &RuleIPCUnixPeerCongestion{}
+
+	if rule.ID() != "CONT_IPC_UNIX_PEER_CONGESTION" || rule.Tier() != 2 || !rule.IsPIDDependent() {
+		t.Fatalf("unexpected rule metadata: ID=%s, Tier=%d, IsPIDDependent=%v", rule.ID(), rule.Tier(), rule.IsPIDDependent())
+	}
+
+	diffPositive := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:        3001,
+				Comm:       "syslog_sender",
+				State:      'S',
+				Wchan:      "unix_stream_sendmsg",
+				CPUPercent: 0.0,
+				NumThreads: 2,
+			},
+		},
+	}
+
+	diag, ok := rule.Evaluate(diffPositive)
+	if !ok || diag == nil {
+		t.Fatalf("expected RuleIPCUnixPeerCongestion to trigger on unix_stream_sendmsg wchan")
+	}
+	if diag.CulpritPID != 3001 || diag.CulpritName != "syslog_sender" {
+		t.Errorf("expected Culprit 3001 syslog_sender, got %d %s", diag.CulpritPID, diag.CulpritName)
+	}
+	if diag.Confidence != 0.90 || diag.Severity != SeverityHigh {
+		t.Errorf("unexpected confidence/severity: %f / %s", diag.Confidence, diag.Severity)
+	}
+
+	diffNormal := &collector.SnapshotDiff{
+		Processes: []collector.ProcessDiff{
+			{
+				PID:        3002,
+				Comm:       "idle_proc",
+				State:      'S',
+				Wchan:      "poll_schedule_timeout",
+				CPUPercent: 0.0,
+			},
+		},
+	}
+	if _, ok := rule.Evaluate(diffNormal); ok {
+		t.Fatalf("expected RuleIPCUnixPeerCongestion not to trigger on poll_schedule_timeout wchan")
+	}
+}
