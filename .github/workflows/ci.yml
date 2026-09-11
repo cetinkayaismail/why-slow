@@ -140,7 +140,7 @@ jobs:
       - name: Gate 5 - Assert Zero Sensitive File Path Reads
         run: |
           echo "Scanning collector for forbidden sensitive file paths..."
-          VIOLATIONS=$(find internal/collector/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "\"/environ\"|\"/maps\"|\"/etc/shadow\"" || true)
+          VIOLATIONS=$(find internal/collector/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "\"/environ\"|\"/maps\"|/mem\b|\"/etc/shadow\"" || true)
           if [ -n "$VIOLATIONS" ]; then
             echo "::error::SECURITY VIOLATION: Reading sensitive paths is strictly forbidden!"
             echo "$VIOLATIONS"
@@ -148,7 +148,52 @@ jobs:
           fi
           echo "PASS: Zero sensitive path access."
 
-      - name: Gate 6 - Official Go Vulnerability Database Scan (govulncheck)
+      - name: Gate 6 - Assert Zero Runtime Regex Engines (Performance Budget)
+        run: |
+          echo "Scanning for forbidden runtime regular expression engines..."
+          VIOLATIONS=$(find cmd/ internal/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "regexp\.(Compile|MustCompile)" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::PERFORMANCE VIOLATION: Runtime regex engines are strictly forbidden!"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: Zero runtime regex engines."
+
+      - name: Gate 7 - Assert Zero ReadAll & Zero Sscanf (Streaming Invariant)
+        run: |
+          echo "Scanning for full-file reads and Sscanf allocations..."
+          VIOLATIONS=$(find cmd/ internal/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "(io\.ReadAll|ioutil\.ReadAll|fmt\.Sscanf)" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::OPTIMIZATION VIOLATION: io.ReadAll and fmt.Sscanf are strictly forbidden!"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: Zero ReadAll and Sscanf usage."
+
+      - name: Gate 8 - Assert Zero init() Functions (Deterministic Execution)
+        run: |
+          echo "Scanning for forbidden init() functions..."
+          VIOLATIONS=$(find cmd/ internal/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "^func init\(\)" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::ARCHITECTURE VIOLATION: init() functions are strictly forbidden!"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: Zero init() functions."
+
+      - name: Gate 9 - Assert Privilege-Agnostic Collectors (Opportunistic Elevation)
+        run: |
+          echo "Verifying os.Getuid() is strictly restricted to cmd/why-slow/..."
+          VIOLATIONS=$(find internal/ -name "*.go" ! -name "*_test.go" | xargs grep -nE "os\.(Getuid|Geteuid)" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::ARCHITECTURE VIOLATION: os.Getuid() must NOT be called in internal/ collectors!"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: Collectors are 100% privilege-agnostic."
+
+      - name: Gate 10 - Official Go Vulnerability Database Scan (govulncheck)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+
