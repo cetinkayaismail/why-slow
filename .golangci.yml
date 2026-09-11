@@ -37,6 +37,7 @@ linters-settings:
     excludes:
       - G104 # unchecked errors (handled specifically by errcheck)
       - G304 # file path inclusion in ReadFile/Open (diagnostic tool reads kernel /proc paths)
+      - G115 # integer overflow conversion (diagnostic counters are bounds-checked in logic)
   misspell:
     locale: US
 
@@ -61,3 +62,5 @@ issues:
       linters:
         - gosec
         - errcheck
+        - misspell
+

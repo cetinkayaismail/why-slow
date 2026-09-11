@@ -91,10 +91,11 @@ func TestWorkerPoolContextCancellation(t *testing.T) {
 
 	procs, err := CollectProcesses(ctx)
 	if err != nil {
-		t.Fatalf("unexpected error on cancelled context: %v", err)
+		t.Fatalf("unexpected error on canceled context: %v", err)
 	}
-	// With an already cancelled context, scan should terminate quickly without deadlock or panic
+	// With an already canceled context, scan should terminate quickly without deadlock or panic
 	t.Logf("Collected %d processes after immediate cancellation", len(procs))
+
 }
 
 func TestWorkerGoroutineCleanup(t *testing.T) {

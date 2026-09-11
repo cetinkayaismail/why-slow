@@ -326,7 +326,7 @@ func ParseNetStat(path string) (NetStatInfo, error) {
 			// This is the matching value row
 			valFields := fields[1:]
 			if prefix == "TcpExt:" {
-				parseTcpExtFields(headerFields, valFields, &info)
+				parseTCPExtFields(headerFields, valFields, &info)
 			}
 			pendingHeaderPrefix = ""
 			headerFields = nil
@@ -344,7 +344,7 @@ func ParseNetStat(path string) (NetStatInfo, error) {
 	return info, nil
 }
 
-func parseTcpExtFields(headers, values []string, info *NetStatInfo) {
+func parseTCPExtFields(headers, values []string, info *NetStatInfo) {
 	count := len(headers)
 	if len(values) < count {
 		count = len(values)
@@ -355,57 +355,60 @@ func parseTcpExtFields(headers, values []string, info *NetStatInfo) {
 		if err != nil {
 			continue
 		}
+		assignTCPExtMetric(headers[i], val, info)
+	}
+}
 
-		switch headers[i] {
-		case "ListenOverflows":
-			info.ListenOverflows = val
-		case "ListenDrops":
-			info.ListenDrops = val
-		case "TCPMemoryPressures":
-			info.TCPMemoryPressures = val
-		case "TCPRcvCollapsed":
-			info.TCPRcvCollapsed = val
-		case "TCPAbortOnMemory":
-			info.TCPAbortOnMemory = val
-		case "TCPReqQFullDoCookies":
-			info.TCPReqQFullDoCookies = val
-		case "TCPWinProbe":
-			info.TCPWinProbe = val
-		case "TCPZeroWindowDrop":
-			info.TCPZeroWindowDrop = val
-		case "TCPAbortOnData":
-			info.TCPAbortOnData = val
-		case "TCPAbortOnClose":
-			info.TCPAbortOnClose = val
-		case "TCPTimeouts":
-			info.TCPTimeouts = val
-		case "TCPSpuriousRtxHost":
-			info.TCPSpuriousRtxHost = val
-		case "TCPTimeWaitOverflow":
-			info.TCPTimeWaitOverflow = val
-		case "PAWSEstab":
-			info.PAWSEstab = val
-		case "PAWSPassive":
-			info.PAWSPassive = val
-		case "TCPSlowStartRetrans":
-			info.TCPSlowStartRetrans = val
-		case "SyncookiesSent":
-			info.SyncookiesSent = val
-		case "SyncookiesRecv":
-			info.SyncookiesRecv = val
-		case "SyncookiesFailed":
-			info.SyncookiesFailed = val
-		case "TCPOFOQueue":
-			info.TCPOFOQueue = val
-		case "TCPFastOpenActiveFail":
-			info.TCPFastOpenActiveFail = val
-		case "TCPFastOpenPassiveFail":
-			info.TCPFastOpenPassiveFail = val
-		case "TCPSynRetrans":
-			info.TCPSynRetrans = val
-		case "TCPDeferAcceptDrop":
-			info.TCPDeferAcceptDrop = val
-		}
+func assignTCPExtMetric(header string, val uint64, info *NetStatInfo) {
+	switch header {
+	case "ListenOverflows":
+		info.ListenOverflows = val
+	case "ListenDrops":
+		info.ListenDrops = val
+	case "TCPMemoryPressures":
+		info.TCPMemoryPressures = val
+	case "TCPRcvCollapsed":
+		info.TCPRcvCollapsed = val
+	case "TCPAbortOnMemory":
+		info.TCPAbortOnMemory = val
+	case "TCPReqQFullDoCookies":
+		info.TCPReqQFullDoCookies = val
+	case "TCPWinProbe":
+		info.TCPWinProbe = val
+	case "TCPZeroWindowDrop":
+		info.TCPZeroWindowDrop = val
+	case "TCPAbortOnData":
+		info.TCPAbortOnData = val
+	case "TCPAbortOnClose":
+		info.TCPAbortOnClose = val
+	case "TCPTimeouts":
+		info.TCPTimeouts = val
+	case "TCPSpuriousRtxHost":
+		info.TCPSpuriousRtxHost = val
+	case "TCPTimeWaitOverflow":
+		info.TCPTimeWaitOverflow = val
+	case "PAWSEstab":
+		info.PAWSEstab = val
+	case "PAWSPassive":
+		info.PAWSPassive = val
+	case "TCPSlowStartRetrans":
+		info.TCPSlowStartRetrans = val
+	case "SyncookiesSent":
+		info.SyncookiesSent = val
+	case "SyncookiesRecv":
+		info.SyncookiesRecv = val
+	case "SyncookiesFailed":
+		info.SyncookiesFailed = val
+	case "TCPOFOQueue":
+		info.TCPOFOQueue = val
+	case "TCPFastOpenActiveFail":
+		info.TCPFastOpenActiveFail = val
+	case "TCPFastOpenPassiveFail":
+		info.TCPFastOpenPassiveFail = val
+	case "TCPSynRetrans":
+		info.TCPSynRetrans = val
+	case "TCPDeferAcceptDrop":
+		info.TCPDeferAcceptDrop = val
 	}
 }
 

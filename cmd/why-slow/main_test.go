@@ -95,6 +95,9 @@ func TestHandleRuleCommands(t *testing.T) {
 
 	// 2. List rules
 	cfg = &cliConfig{listRules: true, noColor: true}
+	if !handleRuleCommands(cfg, engine) {
+		t.Errorf("expected true when listRules is set")
+	}
 	var buf bytes.Buffer
 	presenter.RenderRuleList(&buf, engine.Rules(), "", true)
 	if buf.Len() == 0 {
@@ -108,10 +111,14 @@ func TestHandleRuleCommands(t *testing.T) {
 
 	// 3. Explain valid rule
 	cfg = &cliConfig{explain: "BASE_CPU_SATURATION", noColor: true}
+	if !handleRuleCommands(cfg, engine) {
+		t.Errorf("expected true when explain is set")
+	}
 	rule := engine.GetRule(cfg.explain)
 	if rule == nil {
 		t.Fatalf("expected to find rule BASE_CPU_SATURATION")
 	}
+
 	buf.Reset()
 	presenter.RenderRuleExplanation(&buf, rule, true)
 	if buf.Len() == 0 {
