@@ -5132,54 +5132,51 @@ func (r *RuleFileLockGraphBlocked) Evaluate(diff *collector.SnapshotDiff) (*Diag
 		return nil, false
 	}
 
-	for _, block := range diff.FileLocks.BlockedLocks {
-		victimName := "unknown"
-		for i := range diff.Processes {
-			if diff.Processes[i].PID == block.BlockedPID {
-				victimName = diff.Processes[i].Comm
-				break
-			}
+	block := diff.FileLocks.BlockedLocks[0]
+	victimName := "unknown"
+	for i := range diff.Processes {
+		if diff.Processes[i].PID == block.BlockedPID {
+			victimName = diff.Processes[i].Comm
+			break
 		}
-
-		holderPID := block.HolderPID
-		holderName := "unknown"
-		for i := range diff.Processes {
-			if diff.Processes[i].PID == holderPID {
-				holderName = diff.Processes[i].Comm
-				break
-			}
-		}
-
-		culpritPID := holderPID
-		culpritName := holderName
-		if culpritPID == 0 {
-			culpritPID = block.BlockedPID
-			culpritName = victimName
-		}
-
-		evidence := []string{
-			fmt.Sprintf("Blocked Process: PID %d [%s] waiting for %s lock on inode %s", block.BlockedPID, victimName, block.LockType, block.DeviceInode),
-		}
-		if holderPID > 0 {
-			evidence = append(evidence, fmt.Sprintf("Lock Holder: PID %d [%s] holding exclusive lock", holderPID, holderName))
-		}
-
-		return &Diagnosis{
-			RuleID:         r.ID(),
-			Tier:           2,
-			Severity:       SeverityHigh,
-			Confidence:     0.95,
-			Title:          "Cross-Process File Lock Serialization (/proc/locks)",
-			Explanation:    fmt.Sprintf("Process PID %d [%s] is blocked in the kernel waiting for a %s lock on inode %s held by PID %d [%s].", block.BlockedPID, victimName, block.LockType, block.DeviceInode, holderPID, holderName),
-			Evidence:       evidence,
-			CulpritPID:     culpritPID,
-			CulpritName:    culpritName,
-			CulpritDetails: fmt.Sprintf("Holding %s file lock on inode %s blocking PID %d", block.LockType, block.DeviceInode, block.BlockedPID),
-			Remediation:    fmt.Sprintf("Inspect or release file lock on inode %s or terminate holder PID %d.", block.DeviceInode, holderPID),
-		}, true
 	}
 
-	return nil, false
+	holderPID := block.HolderPID
+	holderName := "unknown"
+	for i := range diff.Processes {
+		if diff.Processes[i].PID == holderPID {
+			holderName = diff.Processes[i].Comm
+			break
+		}
+	}
+
+	culpritPID := holderPID
+	culpritName := holderName
+	if culpritPID == 0 {
+		culpritPID = block.BlockedPID
+		culpritName = victimName
+	}
+
+	evidence := []string{
+		fmt.Sprintf("Blocked Process: PID %d [%s] waiting for %s lock on inode %s", block.BlockedPID, victimName, block.LockType, block.DeviceInode),
+	}
+	if holderPID > 0 {
+		evidence = append(evidence, fmt.Sprintf("Lock Holder: PID %d [%s] holding exclusive lock", holderPID, holderName))
+	}
+
+	return &Diagnosis{
+		RuleID:         r.ID(),
+		Tier:           2,
+		Severity:       SeverityHigh,
+		Confidence:     0.95,
+		Title:          "Cross-Process File Lock Serialization (/proc/locks)",
+		Explanation:    fmt.Sprintf("Process PID %d [%s] is blocked in the kernel waiting for a %s lock on inode %s held by PID %d [%s].", block.BlockedPID, victimName, block.LockType, block.DeviceInode, holderPID, holderName),
+		Evidence:       evidence,
+		CulpritPID:     culpritPID,
+		CulpritName:    culpritName,
+		CulpritDetails: fmt.Sprintf("Holding %s file lock on inode %s blocking PID %d", block.LockType, block.DeviceInode, block.BlockedPID),
+		Remediation:    fmt.Sprintf("Inspect or release file lock on inode %s or terminate holder PID %d.", block.DeviceInode, holderPID),
+	}, true
 }
 
 // RuleIPCUnixPeerCongestion detects processes stalled on Unix domain socket stream writes to saturated peers.
